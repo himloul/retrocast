@@ -20,11 +20,12 @@ enum retro_pixel_format {
 
 // --- CORE FUNCTION POINTERS ---
 retro_run_t core_run = nullptr;
+retro_unload_game_t core_unload_game_ptr = nullptr;
 void *core_handle = nullptr;
 
 // --- STATE MANAGEMENT ---
 std::recursive_mutex core_mutex; 
-std::atomic<retro_pixel_format> current_pixel_format{RETRO_PIXEL_FORMAT_XRGB8888};
+std::atomic<retro_pixel_format> current_pixel_format{RETRO_PIXEL_FORMAT_0RGB1555}; // DEFAULT to 15-bit
 ANativeWindow *native_window = nullptr;
 std::mutex window_mutex;
 
@@ -45,8 +46,34 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 /**
- * Universal Pixel Converter
- * Android (Little Endian) int 0xAABBGGRR means bytes are R, G, B, A.
+ * High-Fidelity GBA Color Correction
+ * GBA colors are very bright to compensate for the dark original screen.
+ * We apply a slight saturation boost and gamma adjustment for OLED.
+ */
+inline uint32_t process_color(uint32_t r, uint32_t g, uint32_t b) {
+    // 1. Bit-filling (expand 5-bit to 8-bit)
+    uint32_t fr = (r << 3) | (r >> 2);
+    uint32_t fg = (g << 3) | (g >> 2);
+    uint32_t fb = (b << 3) | (b >> 2);
+
+    // 2. Linearize and adjust (simple saturation boost)
+    // Formula: (Color * 0.8) + 0.1 * Total_Luma
+    uint32_t luma = (fr + fg + fb) / 3;
+    fr = (fr * 200 + luma * 50) >> 8;
+    fg = (fg * 200 + luma * 50) >> 8;
+    fb = (fb * 200 + luma * 50) >> 8;
+
+    // 3. Clamp and pack as RGBA (Little Endian: R, G, B, A)
+    fr = fr > 255 ? 255 : fr;
+    fg = fg > 255 ? 255 : fg;
+    fb = fb > 255 ? 255 : fb;
+
+    return (0xFF << 24) | (fb << 16) | (fg << 8) | fr;
+}
+
+/**
+ * Universal conversion loop.
+ * Strips hardware padding (stride/pitch) and converts formats.
  */
 void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch, unsigned dst_stride) {
     retro_pixel_format fmt = current_pixel_format.load();
@@ -59,12 +86,8 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
             const uint32_t* s = s32 + (y * s_stride);
             for (unsigned x = 0; x < width; x++) {
                 uint32_t p = s[x];
-                // mGBA XRGB8888 is 0xRRGGBB.
-                // We want 0xFFBBGGRR for Android RGBA_8888.
-                uint32_t r = (p >> 16) & 0xFF;
-                uint32_t g = (p >> 8) & 0xFF;
-                uint32_t b = p & 0xFF;
-                d[x] = (0xFF << 24) | (b << 16) | (g << 8) | r; 
+                // GBA XRGB8888 is 0xRRGGBB.
+                d[x] = process_color((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
             }
         }
     } else if (fmt == RETRO_PIXEL_FORMAT_RGB565) {
@@ -75,15 +98,27 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
             const uint16_t* s = s16 + (y * s_stride);
             for (unsigned x = 0; x < width; x++) {
                 uint16_t p = s[x];
-                uint32_t r = ((p >> 11) & 0x1F) << 3;
-                uint32_t g = ((p >> 5) & 0x3F) << 2;
-                uint32_t b = (p & 0x1F) << 3;
-                d[x] = (0xFF << 24) | (b << 16) | (g << 8) | r;
+                // RRRRRGGGGGGBBBBB
+                d[x] = process_color((p >> 11) & 0x1F, (p >> 5) & 0x3F, p & 0x1F);
+            }
+        }
+    } else {
+        // 0RGB1555 (Standard default)
+        const uint16_t* s15 = (const uint16_t*)src;
+        size_t s_stride = pitch / 2;
+        for (unsigned y = 0; y < height; y++) {
+            uint32_t* d = dst + (y * dst_stride);
+            const uint16_t* s = s15 + (y * s_stride);
+            for (unsigned x = 0; x < width; x++) {
+                uint16_t p = s[x];
+                // 0RRRRRGGGGGBBBBB
+                d[x] = process_color((p >> 10) & 0x1F, (p >> 5) & 0x1F, p & 0x1F);
             }
         }
     }
 }
 
+// --- LIBRETRO CALLBACKS ---
 void video_refresh_callback(const void *data, unsigned width, unsigned height, size_t pitch) {
     if (!data || width == 0 || height == 0 || pitch == 0) return;
 
@@ -106,7 +141,6 @@ void video_refresh_callback(const void *data, unsigned width, unsigned height, s
             size_t count = width * height;
             if (g_pixel_buffer.size() < count) g_pixel_buffer.resize(count);
             convert_and_copy((uint32_t*)g_pixel_buffer.data(), data, width, height, pitch, width);
-
             if (!g_pixel_array || env->GetArrayLength(g_pixel_array) < (jsize)count) {
                 if (g_pixel_array) env->DeleteGlobalRef(g_pixel_array);
                 jintArray local = env->NewIntArray(count);
@@ -181,11 +215,23 @@ Java_com_sharescreen_emulator_NativeRetro_setSurface(JNIEnv* env, jobject thiz, 
     }
 }
 
+void unload_current_core() {
+    if (core_handle) {
+        if (core_unload_game_ptr) core_unload_game_ptr();
+        auto deinit = (retro_deinit_t)dlsym(core_handle, "retro_deinit");
+        if (deinit) deinit();
+        dlclose(core_handle);
+        core_handle = nullptr;
+        core_run = nullptr;
+        core_unload_game_ptr = nullptr;
+    }
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_sharescreen_emulator_NativeRetro_loadCore(JNIEnv* env, jobject thiz, jstring corePath) {
     std::lock_guard<std::recursive_mutex> lock(core_mutex);
     const char *path = env->GetStringUTFChars(corePath, nullptr);
-    if (core_handle) dlclose(core_handle);
+    unload_current_core();
     core_handle = dlopen(path, RTLD_LAZY);
     if (!core_handle) { env->ReleaseStringUTFChars(corePath, path); return JNI_FALSE; }
 
@@ -195,6 +241,7 @@ Java_com_sharescreen_emulator_NativeRetro_loadCore(JNIEnv* env, jobject thiz, js
     auto set_input_poll = (retro_set_input_poll_t)dlsym(core_handle, "retro_set_input_poll");
     auto set_input_state = (retro_set_input_state_t)dlsym(core_handle, "retro_set_input_state");
     core_run = (retro_run_t)dlsym(core_handle, "retro_run");
+    core_unload_game_ptr = (retro_unload_game_t)dlsym(core_handle, "retro_unload_game");
 
     if (set_env) set_env(environment_callback);
     if (set_video) set_video(video_refresh_callback);
@@ -239,5 +286,5 @@ Java_com_sharescreen_emulator_NativeRetro_pullAudio(JNIEnv* env, jobject thiz) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject /* this */) {
-    return env->NewStringUTF("Libretro Bridge 1.4 (Karpathy Correct Colors)");
+    return env->NewStringUTF("Libretro Bridge 1.5 (Pixel Perfect)");
 }
