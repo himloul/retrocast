@@ -1,25 +1,23 @@
 package com.sharescreen.console
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -30,95 +28,145 @@ import com.sharescreen.emulator.NativeRetro
 fun TouchpadController(
     nativeRetro: NativeRetro,
     hapticManager: HapticFeedbackManager,
-    modifier: Modifier = Modifier
+    isLandscape: Boolean
 ) {
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-        // GBA SHOULDER BUTTONS (Top Corners)
-        Row(
+    // STAFF: Ensuring the controller Box has zero background to act as a pure overlay
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        
+        // --- LEFT CLUSTER (L + DPAD) ---
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .align(Alignment.TopCenter),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .align(if (isLandscape) Alignment.CenterStart else Alignment.BottomStart)
+                // STAFF: Increased landscape padding to 64dp to pull controls OVER the 3:2 game screen
+                .padding(start = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            ShoulderButton("L") { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 10, if (pressed) 1 else 0) // RETRO_DEVICE_ID_JOYPAD_L
+            CircleControlButton(label = "L") { pressed ->
+                nativeRetro.setInputState(0, 1, 0, 10, if (pressed) 1 else 0)
                 if (pressed) hapticManager.triggerTick()
             }
-            ShoulderButton("R") { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 11, if (pressed) 1 else 0) // RETRO_DEVICE_ID_JOYPAD_R
-                if (pressed) hapticManager.triggerTick()
+
+            GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
+                DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 8.dp), 4) { nativeRetro.setInputState(0, 1, 0, 4, it); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-8).dp), 5) { nativeRetro.setInputState(0, 1, 0, 5, it); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 8.dp), 6) { nativeRetro.setInputState(0, 1, 0, 6, it); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-8).dp), 7) { nativeRetro.setInputState(0, 1, 0, 7, it); if(it > 0) hapticManager.triggerTick() }
             }
         }
 
-        // DPAD (Left Center)
-        UnifiedDPad(
+        // --- RIGHT CLUSTER (R + ACTION) ---
+        Column(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 32.dp)
-                .size(180.dp),
-            onInput = { id, pressed ->
-                nativeRetro.setInputState(0, 1, 0, id, if (pressed) 1 else 0)
+                .align(if (isLandscape) Alignment.CenterEnd else Alignment.BottomEnd)
+                // STAFF: Increased landscape padding to 64dp to pull controls OVER the 3:2 game screen
+                .padding(end = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            CircleControlButton(label = "R") { pressed ->
+                nativeRetro.setInputState(0, 1, 0, 11, if (pressed) 1 else 0)
                 if (pressed) hapticManager.triggerTick()
             }
-        )
 
-        // Select / Start (Center Bottom)
+            GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
+                ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), Color(0xFFEF9A9A)) { 
+                    nativeRetro.setInputState(0, 1, 0, 8, it); if (it > 0) hapticManager.triggerClick() 
+                }
+                ActionCircle("B", Modifier.align(Alignment.Center).offset(x = (-22).dp, y = 22.dp), Color(0xFFFFF59D)) { 
+                    nativeRetro.setInputState(0, 1, 0, 0, it); if (it > 0) hapticManager.triggerClick() 
+                }
+            }
+        }
+
+        // --- START/SELECT ICONIC BUTTONS ---
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = 48.dp),
+                .padding(bottom = if (isLandscape) 24.dp else 32.dp),
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            SystemButton("SELECT") { pressed ->
+            IconPillButton(Icons.Default.HorizontalRule) { pressed ->
                 nativeRetro.setInputState(0, 1, 0, 2, if (pressed) 1 else 0)
                 if (pressed) hapticManager.triggerTick()
             }
-            SystemButton("START") { pressed ->
+            IconPillButton(Icons.Default.PlayArrow) { pressed ->
                 nativeRetro.setInputState(0, 1, 0, 3, if (pressed) 1 else 0)
                 if (pressed) hapticManager.triggerTick()
-            }
-        }
-
-        // GBA ACTION BUTTONS (Right Center)
-        // GBA only has A and B. They are usually angled.
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 40.dp)
-                .size(200.dp)
-        ) {
-            // A Button (Right-Top)
-            GlassButton("A", Modifier.align(Alignment.TopEnd), Color(0xFFEF9A9A)) { 
-                nativeRetro.setInputState(0, 1, 0, 8, if (it) 1 else 0)
-                if (it) hapticManager.triggerClick()
-            }
-            // B Button (Left-Bottom)
-            GlassButton("B", Modifier.align(Alignment.BottomStart), Color(0xFFFFF59D)) { 
-                nativeRetro.setInputState(0, 1, 0, 0, if (it) 1 else 0)
-                if (it) hapticManager.triggerClick()
             }
         }
     }
 }
 
 @Composable
-fun ShoulderButton(label: String, onToggle: (Boolean) -> Unit) {
+fun GamepadBase(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
+    Box(
+        modifier = modifier
+            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .background(Color.White.copy(alpha = 0.08f), CircleShape),
+        contentAlignment = Alignment.Center,
+        content = content
+    )
+}
+
+@Composable
+fun DPadCircle(modifier: Modifier, id: Int, onInput: (Int) -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
     Box(
-        modifier = Modifier
-            .width(100.dp)
-            .height(45.dp)
-            .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-            .background(if (isPressed) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.08f))
+        modifier = modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(if (isPressed) Color.White.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f))
+            .border(1.dp, Color.White.copy(alpha = if (isPressed) 0.6f else 0.15f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
-                    isPressed = true
-                    onToggle(true)
+                    isPressed = true; onInput(1)
                     waitForUpOrCancellation()
-                    isPressed = false
-                    onToggle(false)
+                    isPressed = false; onInput(0)
+                }
+            }
+    )
+}
+
+@Composable
+fun ActionCircle(label: String, modifier: Modifier, accent: Color, onInput: (Int) -> Unit) {
+    var isPressed by remember { mutableStateOf(false) }
+    Box(
+        modifier = modifier
+            .size(55.dp)
+            .clip(CircleShape)
+            .background(if (isPressed) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.05f))
+            .border(1.5.dp, if (isPressed) accent else Color.White.copy(alpha = 0.25f), CircleShape)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    isPressed = true; onInput(1)
+                    waitForUpOrCancellation()
+                    isPressed = false; onInput(0)
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = if (isPressed) Color.White else Color.White.copy(alpha = 0.6f), fontSize = 18.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+fun CircleControlButton(label: String, onToggle: (Boolean) -> Unit) {
+    var isPressed by remember { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .size(54.dp)
+            .clip(CircleShape)
+            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+            .background(if (isPressed) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f), CircleShape)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    isPressed = true; onToggle(true)
+                    waitForUpOrCancellation()
+                    isPressed = false; onToggle(false)
                 }
             },
         contentAlignment = Alignment.Center
@@ -128,113 +176,24 @@ fun ShoulderButton(label: String, onToggle: (Boolean) -> Unit) {
 }
 
 @Composable
-fun UnifiedDPad(modifier: Modifier, onInput: (Int, Boolean) -> Unit) {
-    var activeId by remember { mutableStateOf<Int?>(null) }
-
-    Box(
-        modifier = modifier
-            .clip(CircleShape)
-            .background(Color.White.copy(alpha = 0.05f))
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val position = event.changes.first().position
-                        val center = Offset(size.width / 2f, size.height / 2f)
-                        val dx = position.x - center.x
-                        val dy = position.y - center.y
-                        val dist = Math.sqrt((dx * dx + dy * dy).toDouble())
-
-                        val newId = if (dist < 40f) null else {
-                            if (Math.abs(dx) > Math.abs(dy)) {
-                                if (dx > 0) 7 else 6 // Right, Left
-                            } else {
-                                if (dy > 0) 5 else 4 // Down, Up
-                            }
-                        }
-
-                        if (newId != activeId) {
-                            activeId?.let { onInput(it, false) }
-                            newId?.let { onInput(it, true) }
-                            activeId = newId
-                        }
-
-                        if (event.changes.all { !it.pressed }) {
-                            activeId?.let { onInput(it, false) }
-                            activeId = null
-                        }
-                    }
-                }
-            }
-    ) {
-        Canvas(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-            val crossWidth = size.width * 0.35f
-            val color = Color.White.copy(alpha = 0.15f)
-            
-            drawRoundRect(
-                color = if (activeId == 4 || activeId == 5) Color.White.copy(alpha = 0.35f) else color,
-                topLeft = Offset((size.width - crossWidth) / 2, 0f),
-                size = Size(crossWidth, size.height),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(15f)
-            )
-            drawRoundRect(
-                color = if (activeId == 6 || activeId == 7) Color.White.copy(alpha = 0.35f) else color,
-                topLeft = Offset(0f, (size.height - crossWidth) / 2),
-                size = Size(size.width, crossWidth),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(15f)
-            )
-        }
-    }
-}
-
-@Composable
-fun GlassButton(label: String, modifier: Modifier, accent: Color, onToggle: (Boolean) -> Unit) {
-    var isPressed by remember { mutableStateOf(false) }
-
-    Box(
-        modifier = modifier
-            .size(75.dp)
-            .clip(CircleShape)
-            .background(if (isPressed) accent.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.1f))
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    isPressed = true
-                    onToggle(true)
-                    do {
-                        val event = awaitPointerEvent()
-                    } while (event.changes.any { it.pressed })
-                    isPressed = false
-                    onToggle(false)
-                }
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text = label, color = if (isPressed) Color.White else accent.copy(alpha = 0.9f), fontSize = 22.sp, fontWeight = FontWeight.Black)
-    }
-}
-
-@Composable
-fun SystemButton(label: String, onToggle: (Boolean) -> Unit) {
+fun IconPillButton(icon: ImageVector, onToggle: (Boolean) -> Unit) {
     var isPressed by remember { mutableStateOf(false) }
     Box(
         modifier = Modifier
-            .width(95.dp)
-            .height(38.dp)
-            .clip(RoundedCornerShape(19.dp))
-            .background(if (isPressed) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f))
+            .size(44.dp)
+            .clip(CircleShape)
+            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
+            .background(if (isPressed) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
-                    isPressed = true
-                    onToggle(true)
+                    isPressed = true; onToggle(true)
                     waitForUpOrCancellation()
-                    isPressed = false
-                    onToggle(false)
+                    isPressed = false; onToggle(false)
                 }
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = Color.Gray, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Icon(icon, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
     }
 }

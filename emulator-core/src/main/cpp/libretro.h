@@ -21,6 +21,23 @@ extern "C" {
 #define RETRO_DEVICE_ID_JOYPAD_RIGHT 7
 #define RETRO_DEVICE_ID_JOYPAD_A 8
 #define RETRO_DEVICE_ID_JOYPAD_X 9
+#define RETRO_DEVICE_ID_JOYPAD_L 10
+#define RETRO_DEVICE_ID_JOYPAD_R 11
+
+enum retro_pixel_format {
+   RETRO_PIXEL_FORMAT_0RGB1555 = 0,
+   RETRO_PIXEL_FORMAT_XRGB8888 = 1,
+   RETRO_PIXEL_FORMAT_RGB565   = 2,
+   RETRO_PIXEL_FORMAT_UNKNOWN  = 0x7fffffff
+};
+
+enum retro_log_level {
+   RETRO_LOG_DEBUG = 0,
+   RETRO_LOG_INFO,
+   RETRO_LOG_WARN,
+   RETRO_LOG_ERROR,
+   RETRO_LOG_DUMMY = 0x7fffffff
+};
 
 struct retro_game_geometry {
    unsigned base_width;

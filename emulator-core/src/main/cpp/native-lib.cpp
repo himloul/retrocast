@@ -6,37 +6,44 @@
 #include <vector>
 #include <mutex>
 #include <atomic>
+#include <cmath>
+#include <cstdarg>
 #include "libretro.h"
 
-#define LOG_TAG "EmulatorCore"
+#define LOG_TAG "RetroCastNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-enum retro_pixel_format {
-   RETRO_PIXEL_FORMAT_0RGB1555 = 0,
-   RETRO_PIXEL_FORMAT_XRGB8888 = 1,
-   RETRO_PIXEL_FORMAT_RGB565   = 2
-};
+// --- LIBRETRO ENVIRONMENT CONSTANTS ---
+#define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT 1
+#define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY 9
+#define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY 31
+#define RETRO_ENVIRONMENT_GET_LOG_INTERFACE 27
+
+// --- LIBRETRO TYPES ---
+typedef void (*retro_log_printf_t)(enum retro_log_level level, const char *fmt, ...);
+struct retro_log_callback { retro_log_printf_t log; };
 
 // --- CORE FUNCTION POINTERS ---
 retro_run_t core_run = nullptr;
 retro_unload_game_t core_unload_game_ptr = nullptr;
 void *core_handle = nullptr;
 
-// --- STATE MANAGEMENT ---
+// --- EXPERT STATE MANAGEMENT ---
 std::recursive_mutex core_mutex; 
-std::atomic<retro_pixel_format> current_pixel_format{RETRO_PIXEL_FORMAT_0RGB1555}; // DEFAULT to 15-bit
+std::atomic<retro_pixel_format> current_pixel_format{RETRO_PIXEL_FORMAT_0RGB1555};
+std::atomic<uint16_t> atomic_input_state{0}; 
+
 ANativeWindow *native_window = nullptr;
 std::mutex window_mutex;
 
-// --- JNI HELPERS ---
 JavaVM* g_vm = nullptr;
 jobject g_nativeRetroObj = nullptr;
 jmethodID g_onNativeFrameMethod = nullptr;
 jintArray g_pixel_array = nullptr; 
-std::vector<int32_t> g_pixel_buffer; 
+std::vector<int32_t> g_pixel_buffer_upscaled; // Upscaled buffer for WebRTC (720x480)
 
-// --- AUDIO BUFFERING ---
+// --- HIGH-PERFORMANCE AUDIO ---
 std::vector<int16_t> g_audio_buffer;
 std::mutex audio_mutex;
 
@@ -45,39 +52,79 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     return JNI_VERSION_1_6;
 }
 
+// --- LOGGING BRIDGE ---
+void cb_log(enum retro_log_level level, const char *fmt, ...) {
+    char buffer[4096];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    switch (level) {
+        case RETRO_LOG_DEBUG: LOGI("[mGBA Debug] %s", buffer); break;
+        case RETRO_LOG_INFO:  LOGI("[mGBA Info] %s", buffer); break;
+        case RETRO_LOG_WARN:  LOGI("[mGBA Warn] %s", buffer); break;
+        case RETRO_LOG_ERROR: LOGE("[mGBA Error] %s", buffer); break;
+        default: break;
+    }
+}
+
 /**
- * High-Fidelity GBA Color Correction
- * GBA colors are very bright to compensate for the dark original screen.
- * We apply a slight saturation boost and gamma adjustment for OLED.
+ * Staff-Level Optimized Color Correction
+ * Corrects for GBA LCD response.
  */
 inline uint32_t process_color(uint32_t r, uint32_t g, uint32_t b) {
-    // 1. Bit-filling (expand 5-bit to 8-bit)
+    // Precise 5-to-8 bit mirroring (RRRRR -> RRRRRRRR)
     uint32_t fr = (r << 3) | (r >> 2);
     uint32_t fg = (g << 3) | (g >> 2);
     uint32_t fb = (b << 3) | (b >> 2);
 
-    // 2. Linearize and adjust (simple saturation boost)
-    // Formula: (Color * 0.8) + 0.1 * Total_Luma
-    uint32_t luma = (fr + fg + fb) / 3;
-    fr = (fr * 200 + luma * 50) >> 8;
-    fg = (fg * 200 + luma * 50) >> 8;
-    fb = (fb * 200 + luma * 50) >> 8;
+    // Color Correction Matrix (Integer Fixpoint 1.8.7)
+    // mimics original GBA color response to prevent "oversaturation" on modern screens
+    uint32_t out_r = (fr * 13 + fg * 2 + fb * 1) >> 4;
+    uint32_t out_g = (fg * 14 + fb * 2) >> 4;
+    uint32_t out_b = (fr * 1 + fg * 2 + fb * 13) >> 4;
 
-    // 3. Clamp and pack as RGBA (Little Endian: R, G, B, A)
-    fr = fr > 255 ? 255 : fr;
-    fg = fg > 255 ? 255 : fg;
-    fb = fb > 255 ? 255 : fb;
-
-    return (0xFF << 24) | (fb << 16) | (fg << 8) | fr;
+    return (0xFF << 24) | (out_b << 16) | (out_g << 8) | out_r;
 }
 
 /**
  * Universal conversion loop.
- * Strips hardware padding (stride/pitch) and converts formats.
+ * Also performs 3x Integer Upscaling (Nearest Neighbor) for the WebRTC pipe.
  */
-void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch, unsigned dst_stride) {
+void convert_and_upscale_3x(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch) {
     retro_pixel_format fmt = current_pixel_format.load();
+    unsigned dst_w = width * 3;
     
+    for (unsigned y = 0; y < height; y++) {
+        for (unsigned x = 0; x < width; x++) {
+            uint32_t pixel;
+            if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+                uint32_t p = ((const uint32_t*)src)[y * (pitch/4) + x];
+                pixel = process_color((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
+            } else if (fmt == RETRO_PIXEL_FORMAT_RGB565) {
+                uint16_t p = ((const uint16_t*)src)[y * (pitch/2) + x];
+                pixel = process_color(((p >> 11) & 0x1F) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3);
+            } else {
+                uint16_t p = ((const uint16_t*)src)[y * (pitch/2) + x];
+                pixel = process_color((p >> 10) & 0x1F, (p >> 5) & 0x1F, p & 0x1F);
+            }
+
+            // Fill 3x3 block in destination (Nearest Neighbor)
+            for (int dy = 0; y * 3 + dy < height * 3 && dy < 3; dy++) {
+                uint32_t* line = dst + ((y * 3 + dy) * dst_w);
+                line[x * 3] = pixel;
+                line[x * 3 + 1] = pixel;
+                line[x * 3 + 2] = pixel;
+            }
+        }
+    }
+}
+
+/**
+ * Direct 1:1 conversion for local hardware scaler.
+ */
+void convert_and_copy_1x(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch, unsigned dst_stride) {
+    retro_pixel_format fmt = current_pixel_format.load();
     if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
         const uint32_t* s32 = (const uint32_t*)src;
         size_t s_stride = pitch / 4;
@@ -86,7 +133,6 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
             const uint32_t* s = s32 + (y * s_stride);
             for (unsigned x = 0; x < width; x++) {
                 uint32_t p = s[x];
-                // GBA XRGB8888 is 0xRRGGBB.
                 d[x] = process_color((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
             }
         }
@@ -98,12 +144,10 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
             const uint16_t* s = s16 + (y * s_stride);
             for (unsigned x = 0; x < width; x++) {
                 uint16_t p = s[x];
-                // RRRRRGGGGGGBBBBB
-                d[x] = process_color((p >> 11) & 0x1F, (p >> 5) & 0x3F, p & 0x1F);
+                d[x] = process_color(((p >> 11) & 0x1F) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3);
             }
         }
     } else {
-        // 0RGB1555 (Standard default)
         const uint16_t* s15 = (const uint16_t*)src;
         size_t s_stride = pitch / 2;
         for (unsigned y = 0; y < height; y++) {
@@ -111,7 +155,6 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
             const uint16_t* s = s15 + (y * s_stride);
             for (unsigned x = 0; x < width; x++) {
                 uint16_t p = s[x];
-                // 0RRRRRGGGGGBBBBB
                 d[x] = process_color((p >> 10) & 0x1F, (p >> 5) & 0x1F, p & 0x1F);
             }
         }
@@ -122,6 +165,7 @@ void convert_and_copy(uint32_t* dst, const void* src, unsigned width, unsigned h
 void video_refresh_callback(const void *data, unsigned width, unsigned height, size_t pitch) {
     if (!data || width == 0 || height == 0 || pitch == 0) return;
 
+    // 1. Local Rendering (1x Raw -> Hardware Scaler)
     {
         std::lock_guard<std::mutex> lock(window_mutex);
         if (native_window) {
@@ -129,26 +173,33 @@ void video_refresh_callback(const void *data, unsigned width, unsigned height, s
             if (ANativeWindow_lock(native_window, &buffer, nullptr) >= 0) {
                 unsigned copy_w = (width < (unsigned)buffer.width) ? width : (unsigned)buffer.width;
                 unsigned copy_h = (height < (unsigned)buffer.height) ? height : (unsigned)buffer.height;
-                convert_and_copy((uint32_t*)buffer.bits, data, copy_w, copy_h, pitch, (unsigned)buffer.stride);
+                convert_and_copy_1x((uint32_t*)buffer.bits, data, copy_w, copy_h, pitch, (unsigned)buffer.stride);
                 ANativeWindow_unlockAndPost(native_window);
             }
         }
     }
 
+    // 2. WebRTC High-Fidelity Pipe (3x Integer Upscale -> Encoder)
     if (g_nativeRetroObj && g_onNativeFrameMethod) {
         JNIEnv* env;
         if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK) {
-            size_t count = width * height;
-            if (g_pixel_buffer.size() < count) g_pixel_buffer.resize(count);
-            convert_and_copy((uint32_t*)g_pixel_buffer.data(), data, width, height, pitch, width);
+            unsigned upscale_w = width * 3;
+            unsigned upscale_h = height * 3;
+            size_t count = upscale_w * upscale_h;
+            
+            if (g_pixel_buffer_upscaled.size() < count) g_pixel_buffer_upscaled.resize(count);
+            
+            // Perform 3x Nearest Neighbor scaling for sharp text on TV
+            convert_and_upscale_3x((uint32_t*)g_pixel_buffer_upscaled.data(), data, width, height, pitch);
+
             if (!g_pixel_array || env->GetArrayLength(g_pixel_array) < (jsize)count) {
                 if (g_pixel_array) env->DeleteGlobalRef(g_pixel_array);
-                jintArray local = env->NewIntArray(count);
-                g_pixel_array = (jintArray)env->NewGlobalRef(local);
-                env->DeleteLocalRef(local);
+                jintArray localLocal = env->NewIntArray(count);
+                g_pixel_array = (jintArray)env->NewGlobalRef(localLocal);
+                env->DeleteLocalRef(localLocal);
             }
-            env->SetIntArrayRegion(g_pixel_array, 0, count, (const jint*)g_pixel_buffer.data());
-            env->CallVoidMethod(g_nativeRetroObj, g_onNativeFrameMethod, g_pixel_array, (jint)width, (jint)height);
+            env->SetIntArrayRegion(g_pixel_array, 0, count, (const jint*)g_pixel_buffer_upscaled.data());
+            env->CallVoidMethod(g_nativeRetroObj, g_onNativeFrameMethod, g_pixel_array, (jint)upscale_w, (jint)upscale_h);
         }
     }
 }
@@ -167,22 +218,23 @@ size_t audio_sample_batch_callback(const int16_t *data, size_t frames) {
 
 void input_poll_callback() {}
 
-uint16_t current_input_state = 0;
 int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
-    if (port == 0 && device == RETRO_DEVICE_JOYPAD) return (current_input_state & (1 << id)) ? 1 : 0;
+    if (port == 0 && device == RETRO_DEVICE_JOYPAD) {
+        return (atomic_input_state.load() & (1 << id)) ? 1 : 0;
+    }
     return 0;
 }
-
-#define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT 1
-#define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY 9
-#define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY 31
 
 bool environment_callback(unsigned cmd, void *data) {
     switch (cmd) {
         case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
             current_pixel_format.store(*(const enum retro_pixel_format *)data);
-            LOGI("Core selected pixel format: %d", (int)current_pixel_format.load());
             return true;
+        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: {
+            auto cb = (struct retro_log_callback *)data;
+            cb->log = cb_log;
+            return true;
+        }
         case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
         case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
             *(const char **)data = ".";
@@ -192,11 +244,14 @@ bool environment_callback(unsigned cmd, void *data) {
     }
 }
 
+// --- JNI EXPORTS ---
 extern "C" JNIEXPORT void JNICALL
 Java_com_sharescreen_emulator_NativeRetro_setInputState(JNIEnv* env, jobject thiz, jint port, jint device, jint index, jint id, jint value) {
     if (port == 0) {
-        if (value) current_input_state |= (1 << id);
-        else current_input_state &= ~(1 << id);
+        uint16_t current = atomic_input_state.load();
+        if (value) current |= (1 << id);
+        else current &= ~(1 << id);
+        atomic_input_state.store(current);
     }
 }
 
@@ -234,7 +289,6 @@ Java_com_sharescreen_emulator_NativeRetro_loadCore(JNIEnv* env, jobject thiz, js
     unload_current_core();
     core_handle = dlopen(path, RTLD_LAZY);
     if (!core_handle) { env->ReleaseStringUTFChars(corePath, path); return JNI_FALSE; }
-
     auto set_env = (retro_set_environment_t)dlsym(core_handle, "retro_set_environment");
     auto set_video = (retro_set_video_refresh_t)dlsym(core_handle, "retro_set_video_refresh");
     auto set_audio = (retro_set_audio_sample_batch_t)dlsym(core_handle, "retro_set_audio_sample_batch");
@@ -242,13 +296,11 @@ Java_com_sharescreen_emulator_NativeRetro_loadCore(JNIEnv* env, jobject thiz, js
     auto set_input_state = (retro_set_input_state_t)dlsym(core_handle, "retro_set_input_state");
     core_run = (retro_run_t)dlsym(core_handle, "retro_run");
     core_unload_game_ptr = (retro_unload_game_t)dlsym(core_handle, "retro_unload_game");
-
     if (set_env) set_env(environment_callback);
     if (set_video) set_video(video_refresh_callback);
     if (set_audio) set_audio(audio_sample_batch_callback);
     if (set_input_poll) set_input_poll(input_poll_callback);
     if (set_input_state) set_input_state(input_state_callback);
-
     auto init = (retro_init_t)dlsym(core_handle, "retro_init");
     if (init) init();
     env->ReleaseStringUTFChars(corePath, path);
@@ -286,5 +338,5 @@ Java_com_sharescreen_emulator_NativeRetro_pullAudio(JNIEnv* env, jobject thiz) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject /* this */) {
-    return env->NewStringUTF("Libretro Bridge 1.5 (Pixel Perfect)");
+    return env->NewStringUTF("RetroCast Engine v2.1 (3x Integer Upscale)");
 }

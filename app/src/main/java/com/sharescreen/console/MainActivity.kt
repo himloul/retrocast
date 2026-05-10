@@ -3,6 +3,7 @@ package com.sharescreen.console
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
@@ -16,18 +17,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.CastConnected
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,12 +42,9 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 import java.io.File
-import java.nio.ByteBuffer
 import android.os.Handler
 import android.os.HandlerThread
-import android.os.Process
 import android.view.Choreographer
-import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
     private lateinit var hapticManager: HapticFeedbackManager
@@ -77,7 +73,6 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
     private fun checkExternalDisplay() {
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         val displays = dm.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
-        
         if (displays.isNotEmpty()) {
             val display = displays[0]
             if (nativePresentation?.display?.displayId != display.displayId) {
@@ -111,6 +106,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
                     val samples = nativeRetro.pullAudio()
                     if (samples != null && samples.isNotEmpty()) {
                         audioTrack?.write(samples, 0, samples.size)
+                        if (isCasting) { streamingManager.pushAudio(samples) }
                     }
                     emulationChoreographer?.postFrameCallback(frameCallback)
                 } else {
@@ -133,8 +129,6 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
 
     override fun onFrameAvailable(pixels: IntArray, width: Int, height: Int) {
         if (!isCasting) return
-
-        // 240x160 is small enough for CPU conversion.
         val buffer = JavaI420Buffer.allocate(width, height)
         val yData = buffer.dataY
         val uData = buffer.dataU
@@ -142,30 +136,25 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
         val yStride = buffer.strideY
         val uStride = buffer.strideU
         val vStride = buffer.strideV
-
         for (y in 0 until height) {
+            val yOffset = y * yStride
+            val pixelOffset = y * width
             for (x in 0 until width) {
-                val pixel = pixels[y * width + x]
-                // 0xAABBGGRR (Little Endian memory order from native C++)
+                val pixel = pixels[pixelOffset + x]
                 val r = pixel and 0xFF
                 val g = (pixel shr 8) and 0xFF
                 val b = (pixel shr 16) and 0xFF
-
-                val luma = (0.299f * r + 0.587f * g + 0.114f * b).toInt().coerceIn(0, 255)
-                yData.put(y * yStride + x, luma.toByte())
-
+                val luma = (77 * r + 150 * g + 29 * b) shr 8
+                yData.put(yOffset + x, luma.toByte())
                 if (x % 2 == 0 && y % 2 == 0) {
-                    val u = (-0.169f * r - 0.331f * g + 0.500f * b + 128).toInt().coerceIn(0, 255)
-                    val v = (0.500f * r - 0.419f * g - 0.081f * b + 128).toInt().coerceIn(0, 255)
+                    val u = ((-43 * r - 84 * g + 127 * b) shr 8) + 128
+                    val v = ((127 * r - 106 * g - 21 * b) shr 8) + 128
                     uData.put((y / 2) * uStride + (x / 2), u.toByte())
                     vData.put((y / 2) * vStride + (x / 2), v.toByte())
                 }
             }
         }
-
-        // STAFF: Ensure timestamp is monotonic and non-zero
-        val timestampNs = System.nanoTime()
-        val frame = VideoFrame(buffer, 0, timestampNs)
+        val frame = VideoFrame(buffer, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
         frame.release()
     }
@@ -192,31 +181,116 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
         dm.registerDisplayListener(displayListener, null)
         checkExternalDisplay()
         startEmulationLoop()
-        val version = nativeRetro.getCoreVersion()
         setContent {
-            val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F), surfaceVariant = Color(0xFF49454F))
+            val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
+            val configuration = LocalConfiguration.current
+            val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
             MaterialTheme(colorScheme = darkColorScheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
                     var showCastSheet by remember { mutableStateOf(false) }
                     val sheetState = rememberModalBottomSheetState()
-                    ControllerScreen(version = version, nativeRetro = nativeRetro, hapticManager = hapticManager, isCasting = isCasting, isNativeDisplayConnected = isNativeDisplayConnected, onCastClick = { showCastSheet = true }, onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip", "application/x-gba")) }, loadedRom = loadedRomPath?.substringAfterLast('/'))
+                    
+                    if (isLandscape) {
+                        WideHandheldLayout(
+                            nativeRetro = nativeRetro,
+                            hapticManager = hapticManager,
+                            isCasting = isCasting,
+                            onCastClick = { showCastSheet = true },
+                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }
+                        )
+                    } else {
+                        PortraitHandheldLayout(
+                            nativeRetro = nativeRetro,
+                            hapticManager = hapticManager,
+                            isCasting = isCasting,
+                            isNativeDisplayConnected = isNativeDisplayConnected,
+                            onCastClick = { showCastSheet = true },
+                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }
+                        )
+                    }
+
                     if (showCastSheet) {
-                        ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surface) {
+                        ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = Color(0xFF121212)) {
                             CastSheetContent(isCasting = isCasting, isNativeDisplayConnected = isNativeDisplayConnected, castUrl = castUrl, onToggleCast = { toggleCasting() }, onDismiss = { showCastSheet = false })
                         }
                     }
+
                     if (isDownloading) {
                         Dialog(onDismissRequest = {}) {
                             Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                                 Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator()
-                                    Spacer(modifier = Modifier.height(16.dp))
+                                    CircularProgressIndicator(); Spacer(modifier = Modifier.height(16.dp))
                                     Text("Downloading Engine...", style = MaterialTheme.typography.titleMedium)
-                                    Text("Please wait, optimizing console.", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun PortraitHandheldLayout(
+        nativeRetro: NativeRetro,
+        hapticManager: HapticFeedbackManager,
+        isCasting: Boolean,
+        isNativeDisplayConnected: Boolean,
+        onCastClick: () -> Unit,
+        onLoadRom: () -> Unit
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().weight(0.1f).padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = Color.LightGray) }
+                Text("RetroCast", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
+                IconButton(onClick = onCastClick) {
+                    Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.LightGray)
+                }
+            }
+            Box(modifier = Modifier.weight(0.4f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                if (!isCasting && !isNativeDisplayConnected) {
+                    AndroidView(factory = { ctx -> EmulatorView(ctx).apply { setNativeRetro(nativeRetro) } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                } else {
+                    Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                }
+            }
+            Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
+                TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+            }
+        }
+    }
+
+    @Composable
+    fun WideHandheldLayout(
+        nativeRetro: NativeRetro,
+        hapticManager: HapticFeedbackManager,
+        isCasting: Boolean,
+        onCastClick: () -> Unit,
+        onLoadRom: () -> Unit
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (!isCasting && !isNativeDisplayConnected) {
+                    AndroidView(factory = { ctx -> EmulatorView(ctx).apply { setNativeRetro(nativeRetro) } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                } else {
+                    Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                }
+            }
+            TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = true)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(onClick = onLoadRom, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
+                    Icon(Icons.Default.FolderOpen, "Load", tint = Color.White)
+                }
+                IconButton(onClick = onCastClick, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
+                    Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.White)
                 }
             }
         }
@@ -238,27 +312,25 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
                 var romFile = outputFile
                 if (fileName.endsWith(".zip", true)) {
                     val extracted = extractRomFromZip(outputFile)
-                    if (extracted != null) { romFile = extracted } else { Toast.makeText(this@MainActivity, "No supported ROM found in ZIP", Toast.LENGTH_SHORT).show(); return@launch }
+                    if (extracted != null) { romFile = extracted } else { return@launch }
                 }
                 val extension = romFile.name.substringAfterLast('.', "").lowercase()
-                val romPath = romFile.absolutePath
                 val coreName = when (extension) { "gba" -> "mgba_libretro_android.so"; else -> null }
-                if (coreName == null) { Toast.makeText(this@MainActivity, "No core found for .$extension files", Toast.LENGTH_LONG).show(); return@launch }
+                if (coreName == null) return@launch
                 val coreFile = File(filesDir, coreName)
                 if (!coreFile.exists()) {
                     isDownloading = true
                     val success = CoreDownloader.downloadCore(coreName, filesDir)
                     isDownloading = false
-                    if (!success) { Toast.makeText(this@MainActivity, "Failed to download engine.", Toast.LENGTH_LONG).show(); return@launch }
+                    if (!success) return@launch
                 }
                 if (nativeRetro.loadCore(coreFile.absolutePath)) {
-                    if (nativeRetro.loadGame(romPath)) {
-                        loadedRomPath = romPath
+                    if (nativeRetro.loadGame(romFile.absolutePath)) {
+                        loadedRomPath = romFile.absolutePath
                         isCoreReady = true
-                        Toast.makeText(this@MainActivity, "Started: ${romFile.name}", Toast.LENGTH_SHORT).show()
-                    } else { Toast.makeText(this@MainActivity, "Core failed to load game", Toast.LENGTH_SHORT).show() }
-                } else { Toast.makeText(this@MainActivity, "Failed to load core: ${coreFile.name}", Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) { isDownloading = false; Toast.makeText(this@MainActivity, "Loader Error: ${e.message}", Toast.LENGTH_SHORT).show() }
+                    }
+                }
+            } catch (e: Exception) { isDownloading = false }
         }
     }
 
@@ -271,33 +343,23 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
                 val ext = entry.name.substringAfterLast('.', "").lowercase()
                 if (supported.contains(ext) && !entry.isDirectory) {
                     val out = File(filesDir, entry.name)
-                    out.outputStream().use { zis.copyTo(it) }
-                    zis.closeEntry()
-                    zis.close()
-                    return out
+                    out.outputStream().use { zis.copyTo(it) }; zis.closeEntry(); zis.close(); return out
                 }
-                zis.closeEntry()
-                entry = zis.nextEntry
+                zis.closeEntry(); entry = zis.nextEntry
             }
             zis.close()
-        } catch (e: Exception) { e.printStackTrace() }
+        } catch (e: Exception) { }
         return null
     }
 
     private fun toggleCasting() {
         if (isCasting) {
-            signalingServer?.stop()
-            signalingServer = null
-            streamingManager.dispose()
-            isCasting = false
-            castUrl = ""
+            signalingServer?.stop(); signalingServer = null; streamingManager.dispose(); isCasting = false; castUrl = ""
         } else {
-            val ip = NetworkUtils.getLocalIpAddress(this)
-            val port = 8080
-            if (ip == null) { Toast.makeText(this, "Check WiFi", Toast.LENGTH_SHORT).show(); return }
+            val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
+            if (ip == null) return
             castUrl = "http://$ip:$port"
-            streamingManager.dispose()
-            streamingManager = StreamingManager(this)
+            streamingManager.dispose(); streamingManager = StreamingManager(this)
             streamingManager.createPeerConnection(object : PeerConnection.Observer {
                 override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
                 override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
@@ -346,13 +408,8 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
     override fun onDestroy() {
         super.onDestroy()
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        dm.unregisterDisplayListener(displayListener)
-        nativePresentation?.dismiss()
-        stopEmulationLoop()
-        audioTrack?.stop()
-        audioTrack?.release()
-        signalingServer?.stop()
-        streamingManager.dispose()
+        dm.unregisterDisplayListener(displayListener); nativePresentation?.dismiss()
+        stopEmulationLoop(); audioTrack?.stop(); audioTrack?.release(); signalingServer?.stop(); streamingManager.dispose()
     }
 }
 
@@ -361,58 +418,22 @@ fun CastSheetContent(isCasting: Boolean, isNativeDisplayConnected: Boolean, cast
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Cast to Screen", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(16.dp))
-        if (isNativeDisplayConnected) {
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.CastConnected, "Native Cast", tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text("Native HDMI/Cast Active", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                }
-            }
-            Spacer(modifier = Modifier.height(24.dp))
-        }
         if (!isCasting) {
-            Text("Stream your game to any TV or browser on your network with ultra-low latency.", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Ultra-low latency WebRTC cast.", color = Color.Gray)
             Spacer(modifier = Modifier.height(32.dp))
             Button(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Start Web Casting") }
         } else {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Surface(color = Color.DarkGray, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Connection URL", style = MaterialTheme.typography.labelMedium)
-                    Text(castUrl, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(castUrl, style = MaterialTheme.typography.titleLarge, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                     IconButton(onClick = {
                         val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
-                        Toast.makeText(context, "URL Copied", Toast.LENGTH_SHORT).show()
                     }) { Icon(Icons.Default.ContentCopy, "Copy") }
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
-            OutlinedButton(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Stop Web Casting") }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-    }
-}
-
-@Composable
-fun ControllerScreen(version: String, nativeRetro: NativeRetro, hapticManager: HapticFeedbackManager, isCasting: Boolean, isNativeDisplayConnected: Boolean, onCastClick: () -> Unit, onLoadRom: () -> Unit, loadedRom: String?) {
-    Column(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF121212), Color.Black)))) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 20.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column {
-                Text("ShareScreen", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, letterSpacing = (-1).sp)
-                if (loadedRom != null) { Text(loadedRom, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary) }
-                else { Text(version, style = MaterialTheme.typography.labelSmall, color = Color.DarkGray) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                IconButton(onClick = onCastClick) { Icon(if (isCasting || isNativeDisplayConnected) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting || isNativeDisplayConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-        }
-        Box(modifier = Modifier.weight(1f)) {
-            if (!isCasting && !isNativeDisplayConnected) { AndroidView(factory = { ctx -> EmulatorView(ctx).apply { setNativeRetro(nativeRetro) } }, modifier = Modifier.fillMaxSize()) }
-            TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, modifier = Modifier.fillMaxSize())
+            OutlinedButton(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Stop Web Casting") }
         }
     }
 }

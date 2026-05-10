@@ -2,6 +2,7 @@ package com.sharescreen.console
 
 import android.content.Context
 import android.util.AttributeSet
+import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.sharescreen.emulator.NativeRetro
@@ -20,8 +21,10 @@ class EmulatorView @JvmOverloads constructor(
 
     fun setNativeRetro(retro: NativeRetro) {
         this.nativeRetro = retro
-        // If surface is already created, set it now
+        // STAFF: CRITICAL - If the surface is already valid (e.g. after a Compose recomposition),
+        // we MUST bind it immediately to the engine to avoid a black screen.
         if (holder.surface.isValid) {
+            Log.d("EmulatorView", "Binding valid surface on setNativeRetro")
             retro.setSurface(holder.surface)
         }
     }
@@ -33,7 +36,7 @@ class EmulatorView @JvmOverloads constructor(
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
 
-        if (width == 0 || height == 0) {
+        if (width <= 0 || height == 0) {
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             return
         }
@@ -54,14 +57,18 @@ class EmulatorView @JvmOverloads constructor(
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        Log.d("EmulatorView", "surfaceCreated")
         nativeRetro?.setSurface(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        Log.d("EmulatorView", "surfaceChanged")
         nativeRetro?.setSurface(holder.surface)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        nativeRetro?.setSurface(null)
+        Log.d("EmulatorView", "surfaceDestroyed")
+        // Note: We don't necessarily want to set null if we're just rotating
+        // but we'll let the next surfaceCreated handle the bind.
     }
 }
