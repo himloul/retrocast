@@ -43,17 +43,17 @@ import org.json.JSONObject
 import org.webrtc.*
 import java.io.File
 import android.os.Handler
-import android.os.HandlerThread
-import android.view.Choreographer
 
-class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
+import android.os.Looper
+import java.nio.ByteBuffer
+
+class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
     private lateinit var hapticManager: HapticFeedbackManager
     private lateinit var nativeRetro: NativeRetro
     private lateinit var streamingManager: StreamingManager
     private var videoCapturer = LibretroVideoCapturer()
     
     private var signalingServer: SignalingServer? = null
-    private var audioTrack: AudioTrack? = null
     
     private var isCasting by mutableStateOf(false)
     private var castUrl by mutableStateOf("")
@@ -61,8 +61,21 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
     private var isDownloading by mutableStateOf(false)
 
     private var nativePresentation: GamePresentation? = null
+    private var emulatorView: EmulatorView? = null
     private var isNativeDisplayConnected by mutableStateOf(false)
     private var isCoreReady = false
+
+    private var pixelBuffer: ByteBuffer? = null
+
+    private val saveHandler = Handler(Looper.getMainLooper())
+    private val saveRunnable = object : Runnable {
+        override fun run() {
+            if (isCoreReady) {
+                nativeRetro.saveSram()
+            }
+            saveHandler.postDelayed(this, 30000)
+        }
+    }
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) { checkExternalDisplay() }
@@ -77,7 +90,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
             val display = displays[0]
             if (nativePresentation?.display?.displayId != display.displayId) {
                 nativePresentation?.dismiss()
-                nativePresentation = GamePresentation(this, display, nativeRetro).apply { show() }
+                nativePresentation = GamePresentation(this, display).apply { show() }
                 isNativeDisplayConnected = true
             }
         } else {
@@ -87,100 +100,57 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
         }
     }
 
-    private var emulationHandlerThread: HandlerThread? = null
-    private var emulationChoreographer: Choreographer? = null
-    private var frameCallback: Choreographer.FrameCallback? = null
-
-    private fun startEmulationLoop() {
-        if (emulationHandlerThread != null) return
-        emulationHandlerThread = HandlerThread("EmulationThread").apply {
-            start()
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
-        }
-        val handler = Handler(emulationHandlerThread!!.looper)
-        handler.post {
-            emulationChoreographer = Choreographer.getInstance()
-            frameCallback = Choreographer.FrameCallback { _ ->
-                if (loadedRomPath != null && isCoreReady) {
-                    nativeRetro.runFrame()
-                    val samples = nativeRetro.pullAudio()
-                    if (samples != null && samples.isNotEmpty()) {
-                        audioTrack?.write(samples, 0, samples.size)
-                        if (isCasting) { streamingManager.pushAudio(samples) }
-                    }
-                    emulationChoreographer?.postFrameCallback(frameCallback)
-                } else {
-                    Handler(android.os.Looper.myLooper()!!).postDelayed({
-                        emulationChoreographer?.postFrameCallback(frameCallback)
-                    }, 100)
-                }
-            }
-            emulationChoreographer?.postFrameCallback(frameCallback)
-        }
-    }
-
-    private fun stopEmulationLoop() {
-        frameCallback?.let { emulationChoreographer?.removeFrameCallback(it) }
-        emulationHandlerThread?.quitSafely()
-        emulationHandlerThread = null
-        emulationChoreographer = null
-        frameCallback = null
-    }
-
-    override fun onFrameAvailable(pixels: IntArray, width: Int, height: Int) {
+    override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int) {
+        emulatorView?.setFrame(pixels, width, height)
+        nativePresentation?.setFrame(pixels, width, height)
         if (!isCasting) return
-        val buffer = JavaI420Buffer.allocate(width, height)
-        val yData = buffer.dataY
-        val uData = buffer.dataU
-        val vData = buffer.dataV
-        val yStride = buffer.strideY
-        val uStride = buffer.strideU
-        val vStride = buffer.strideV
+
+        val i420 = JavaI420Buffer.allocate(width, height)
+        val yData = i420.dataY
+        val uData = i420.dataU
+        val vData = i420.dataV
+        val yStride = i420.strideY
+        val uStride = i420.strideU
+        val vStride = i420.strideV
+
+        pixels.rewind()
         for (y in 0 until height) {
-            val yOffset = y * yStride
-            val pixelOffset = y * width
             for (x in 0 until width) {
-                val pixel = pixels[pixelOffset + x]
-                val r = pixel and 0xFF
-                val g = (pixel shr 8) and 0xFF
-                val b = (pixel shr 16) and 0xFF
-                val luma = (77 * r + 150 * g + 29 * b) shr 8
-                yData.put(yOffset + x, luma.toByte())
-                if (x % 2 == 0 && y % 2 == 0) {
-                    val u = ((-43 * r - 84 * g + 127 * b) shr 8) + 128
-                    val v = ((127 * r - 106 * g - 21 * b) shr 8) + 128
+                val r = pixels.get().toInt() and 0xFF
+                val g = pixels.get().toInt() and 0xFF
+                val b = pixels.get().toInt() and 0xFF
+                pixels.get() // skip alpha
+
+                val yy = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
+                yData.put(y * yStride + x, yy.toByte())
+
+                if (y % 2 == 0 && x % 2 == 0) {
+                    val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                    val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
                     uData.put((y / 2) * uStride + (x / 2), u.toByte())
                     vData.put((y / 2) * vStride + (x / 2), v.toByte())
                 }
             }
         }
-        val frame = VideoFrame(buffer, 0, System.nanoTime())
+
+        val frame = VideoFrame(i420, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
         frame.release()
-    }
-
-    private fun setupAudio() {
-        val minBufferSize = AudioTrack.getMinBufferSize(44100, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT)
-        audioTrack = AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
-            .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(44100).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
-            .setBufferSizeInBytes(minBufferSize * 2)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-        audioTrack?.play()
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hapticManager = HapticFeedbackManager(this)
-        nativeRetro = NativeRetro().apply { setVideoListener(this@MainActivity) }
+        nativeRetro = NativeRetro()
         streamingManager = StreamingManager(this)
-        setupAudio()
+        
+        pixelBuffer = ByteBuffer.allocateDirect(512 * 512 * 4)
+
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.registerDisplayListener(displayListener, null)
         checkExternalDisplay()
-        startEmulationLoop()
+        saveHandler.post(saveRunnable)
         setContent {
             val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
             val configuration = LocalConfiguration.current
@@ -212,7 +182,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
 
                     if (showCastSheet) {
                         ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = Color(0xFF121212)) {
-                            CastSheetContent(isCasting = isCasting, isNativeDisplayConnected = isNativeDisplayConnected, castUrl = castUrl, onToggleCast = { toggleCasting() }, onDismiss = { showCastSheet = false })
+                            CastSheetContent(isCasting = isCasting, castUrl = castUrl, onToggleCast = { toggleCasting() })
                         }
                     }
 
@@ -254,7 +224,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
             }
             Box(modifier = Modifier.weight(0.4f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 if (!isCasting && !isNativeDisplayConnected) {
-                    AndroidView(factory = { ctx -> EmulatorView(ctx).apply { setNativeRetro(nativeRetro) } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                    AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
                 } else {
                     Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
                 }
@@ -276,7 +246,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
         Box(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 if (!isCasting && !isNativeDisplayConnected) {
-                    AndroidView(factory = { ctx -> EmulatorView(ctx).apply { setNativeRetro(nativeRetro) } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                    AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
                 } else {
                     Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
                 }
@@ -324,10 +294,18 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
                     isDownloading = false
                     if (!success) return@launch
                 }
-                if (nativeRetro.loadCore(coreFile.absolutePath)) {
+                if (coreFile.exists()) {
+                    // SETUP PATHS
+                    val systemDir = File(filesDir, "system").apply { mkdirs() }
+                    val saveDir = File(filesDir, "saves").apply { mkdirs() }
+                    nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
+
+                    nativeRetro.init(coreFile.absolutePath)
+                    pixelBuffer?.let { nativeRetro.setCallback(this@MainActivity, it) }
                     if (nativeRetro.loadGame(romFile.absolutePath)) {
                         loadedRomPath = romFile.absolutePath
                         isCoreReady = true
+                        nativeRetro.start()
                     }
                 }
             } catch (e: Exception) { isDownloading = false }
@@ -360,6 +338,7 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
             if (ip == null) return
             castUrl = "http://$ip:$port"
             streamingManager.dispose(); streamingManager = StreamingManager(this)
+
             streamingManager.createPeerConnection(object : PeerConnection.Observer {
                 override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
                 override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
@@ -405,16 +384,25 @@ class MainActivity : ComponentActivity(), NativeRetro.VideoListener {
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        if (isCoreReady) {
+            nativeRetro.saveSram()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        saveHandler.removeCallbacks(saveRunnable)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.unregisterDisplayListener(displayListener); nativePresentation?.dismiss()
-        stopEmulationLoop(); audioTrack?.stop(); audioTrack?.release(); signalingServer?.stop(); streamingManager.dispose()
+        nativeRetro.stop(); signalingServer?.stop(); streamingManager.dispose()
     }
+
 }
 
 @Composable
-fun CastSheetContent(isCasting: Boolean, isNativeDisplayConnected: Boolean, castUrl: String, onToggleCast: () -> Unit, onDismiss: () -> Unit) {
+fun CastSheetContent(isCasting: Boolean, castUrl: String, onToggleCast: () -> Unit) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Cast to Screen", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)

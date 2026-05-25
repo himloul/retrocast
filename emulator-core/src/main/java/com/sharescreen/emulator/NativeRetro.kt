@@ -1,6 +1,7 @@
 package com.sharescreen.emulator
 
 import android.view.Surface
+import java.nio.ByteBuffer
 
 class NativeRetro {
     companion object {
@@ -9,58 +10,36 @@ class NativeRetro {
         }
     }
 
-    /**
-     * Interface for receiving video frames directly from Libretro.
-     * Pixels are in XRGB8888 (32-bit) format.
-     */
-    interface VideoListener {
-        fun onFrameAvailable(pixels: IntArray, width: Int, height: Int)
+    interface FrameCallback {
+        fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int)
     }
 
-    private var videoListener: VideoListener? = null
-
-    fun setVideoListener(listener: VideoListener?) {
-        this.videoListener = listener
-    }
-
-    // Called from JNI
-    private fun onNativeFrame(pixels: IntArray, width: Int, height: Int) {
-        videoListener?.onFrameAvailable(pixels, width, height)
-    }
-
-    /**
-     * Get the current version of the native bridge.
-     */
     external fun getCoreVersion(): String
 
-    /**
-     * Load a Libretro core from a shared library (.so)
-     */
-    external fun loadCore(corePath: String): Boolean
+    external fun init(corePath: String)
 
-    /**
-     * Load a ROM file and start the game within the loaded core.
-     */
     external fun loadGame(gamePath: String): Boolean
 
-    /**
-     * Run a single frame of emulation.
-     */
-    external fun runFrame()
+    external fun start()
 
-    /**
-     * Update the input state for a specific device.
-     */
-    external fun setInputState(port: Int, device: Int, index: Int, id: Int, value: Int)
+    external fun stop()
 
-    /**
-     * Set the surface to draw on.
-     */
-    external fun setSurface(surface: Surface?)
+    external fun setInputState(state: Int)
 
-    /**
-     * Pull buffered audio samples from the core.
-     * Returns PCM 16-bit interleaved stereo samples.
-     */
-    external fun pullAudio(): ShortArray?
+    private var currentInputMask = 0
+
+    fun setButton(id: Int, pressed: Boolean) {
+        if (pressed) {
+            currentInputMask = currentInputMask or (1 shl id)
+        } else {
+            currentInputMask = currentInputMask and (1 shl id).inv()
+        }
+        setInputState(currentInputMask)
+    }
+
+    external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?)
+
+    external fun setPaths(systemPath: String, savePath: String)
+
+    external fun saveSram()
 }

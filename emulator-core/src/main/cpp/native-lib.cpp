@@ -1,342 +1,189 @@
 #include <jni.h>
 #include <string>
 #include <android/log.h>
-#include <android/native_window_jni.h>
 #include <dlfcn.h>
 #include <vector>
 #include <mutex>
 #include <atomic>
-#include <cmath>
 #include <cstdarg>
+#include <thread>
+#include <cstring>
+#include <cstdlib>
+#include <chrono>
+#include <condition_variable>
+#include <fstream>
+
+#include <oboe/Oboe.h>
+
 #include "libretro.h"
 
-#define LOG_TAG "RetroCastNative"
+#define LOG_TAG "ZenithEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// --- LIBRETRO ENVIRONMENT CONSTANTS ---
 #define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT 1
 #define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY 9
 #define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY 31
 #define RETRO_ENVIRONMENT_GET_LOG_INTERFACE 27
+#define RETRO_ENVIRONMENT_GET_VARIABLE 15
+#define RETRO_ENVIRONMENT_GET_CAN_DUPE 10
+#define RETRO_MEMORY_SAVE_RAM 0
 
-// --- LIBRETRO TYPES ---
+struct retro_variable { const char *key; const char *value; };
 typedef void (*retro_log_printf_t)(enum retro_log_level level, const char *fmt, ...);
 struct retro_log_callback { retro_log_printf_t log; };
 
-// --- CORE FUNCTION POINTERS ---
-retro_run_t core_run = nullptr;
-retro_unload_game_t core_unload_game_ptr = nullptr;
-void *core_handle = nullptr;
+struct RingBuffer {
+    std::vector<int16_t> buffer;
+    std::atomic<size_t> head{0}, tail{0};
+    const size_t capacity;
+    explicit RingBuffer(size_t cap = 65536) : capacity(cap) { buffer.resize(cap); }
+    size_t available_to_write() const { size_t h = head.load(std::memory_order_relaxed), t = tail.load(std::memory_order_acquire); return (h >= t) ? (capacity - (h - t) - 1) : (t - h - 1); }
+    void write(const int16_t* d, size_t c) { size_t h = head.load(std::memory_order_relaxed); for (size_t i = 0; i < c; i++) { buffer[h] = d[i]; h = (h + 1) % capacity; } head.store(h, std::memory_order_release); }
+    size_t read(int16_t* d, size_t c) { size_t t = tail.load(std::memory_order_relaxed), h = head.load(std::memory_order_acquire), r = 0; while (r < c && t != h) { d[r++] = buffer[t]; t = (t + 1) % capacity; } tail.store(t, std::memory_order_release); return r; }
+};
 
-// --- EXPERT STATE MANAGEMENT ---
-std::recursive_mutex core_mutex; 
-std::atomic<retro_pixel_format> current_pixel_format{RETRO_PIXEL_FORMAT_0RGB1555};
-std::atomic<uint16_t> atomic_input_state{0}; 
+struct ZenithEngine {
+    RingBuffer audio_rb;
+    std::atomic<bool> emu_running{false};
+    std::thread emu_thread;
+    std::condition_variable audio_cv;
+    std::mutex audio_cv_mtx;
+    void *core_handle = nullptr;
+    retro_run_t core_run = nullptr;
+    std::atomic<retro_pixel_format> pixel_fmt{RETRO_PIXEL_FORMAT_0RGB1555};
+    std::atomic<uint16_t> input_state{0};
+    std::recursive_mutex core_mutex;
+    std::string system_dir = ".", save_dir = ".", rom_path = "";
+    typedef void *(*get_mem_data_t)(unsigned id);
+    typedef size_t (*get_mem_size_t)(unsigned id);
+    get_mem_data_t get_mem_data = nullptr;
+    get_mem_size_t get_mem_size = nullptr;
+    JavaVM* jvm = nullptr;
+    jobject callback_obj = nullptr;
+    jobject argb_buf = nullptr;
+    jmethodID on_frame_mid = nullptr;
+    uint8_t* argb_ptr = nullptr;
+    std::shared_ptr<oboe::AudioStream> audio_stream;
+};
+static ZenithEngine g_engine;
 
-ANativeWindow *native_window = nullptr;
-std::mutex window_mutex;
+static void libretro_log(enum retro_log_level, const char *fmt, ...) { va_list a; va_start(a,fmt); __android_log_vprint(ANDROID_LOG_INFO,"Libretro",fmt,a); va_end(a); }
 
-JavaVM* g_vm = nullptr;
-jobject g_nativeRetroObj = nullptr;
-jmethodID g_onNativeFrameMethod = nullptr;
-jintArray g_pixel_array = nullptr; 
-std::vector<int32_t> g_pixel_buffer_upscaled; // Upscaled buffer for WebRTC (720x480)
+void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
+    if (!data || !g_engine.argb_ptr) { LOGE("video_refresh_cb: no data or argb_ptr null (data=%p argb_ptr=%p)", data, g_engine.argb_ptr); return; }
 
-// --- HIGH-PERFORMANCE AUDIO ---
-std::vector<int16_t> g_audio_buffer;
-std::mutex audio_mutex;
+    retro_pixel_format fmt = g_engine.pixel_fmt.load();
+    LOGI("video_refresh_cb fmt=%d w=%u h=%u pitch=%zu", fmt, w, h, pitch);
 
-extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
-    g_vm = vm;
-    return JNI_VERSION_1_6;
-}
+    uint8_t* ptr = g_engine.argb_ptr;
 
-// --- LOGGING BRIDGE ---
-void cb_log(enum retro_log_level level, const char *fmt, ...) {
-    char buffer[4096];
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, args);
-    va_end(args);
-    switch (level) {
-        case RETRO_LOG_DEBUG: LOGI("[mGBA Debug] %s", buffer); break;
-        case RETRO_LOG_INFO:  LOGI("[mGBA Info] %s", buffer); break;
-        case RETRO_LOG_WARN:  LOGI("[mGBA Warn] %s", buffer); break;
-        case RETRO_LOG_ERROR: LOGE("[mGBA Error] %s", buffer); break;
-        default: break;
-    }
-}
-
-/**
- * Staff-Level Optimized Color Correction
- * Corrects for GBA LCD response.
- */
-inline uint32_t process_color(uint32_t r, uint32_t g, uint32_t b) {
-    // Precise 5-to-8 bit mirroring (RRRRR -> RRRRRRRR)
-    uint32_t fr = (r << 3) | (r >> 2);
-    uint32_t fg = (g << 3) | (g >> 2);
-    uint32_t fb = (b << 3) | (b >> 2);
-
-    // Color Correction Matrix (Integer Fixpoint 1.8.7)
-    // mimics original GBA color response to prevent "oversaturation" on modern screens
-    uint32_t out_r = (fr * 13 + fg * 2 + fb * 1) >> 4;
-    uint32_t out_g = (fg * 14 + fb * 2) >> 4;
-    uint32_t out_b = (fr * 1 + fg * 2 + fb * 13) >> 4;
-
-    return (0xFF << 24) | (out_b << 16) | (out_g << 8) | out_r;
-}
-
-/**
- * Universal conversion loop.
- * Also performs 3x Integer Upscaling (Nearest Neighbor) for the WebRTC pipe.
- */
-void convert_and_upscale_3x(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch) {
-    retro_pixel_format fmt = current_pixel_format.load();
-    unsigned dst_w = width * 3;
-    
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x++) {
-            uint32_t pixel;
+    for (unsigned y = 0; y < h; y++) {
+        for (unsigned x = 0; x < w; x++) {
+            uint32_t color;
             if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-                uint32_t p = ((const uint32_t*)src)[y * (pitch/4) + x];
-                pixel = process_color((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
-            } else if (fmt == RETRO_PIXEL_FORMAT_RGB565) {
-                uint16_t p = ((const uint16_t*)src)[y * (pitch/2) + x];
-                pixel = process_color(((p >> 11) & 0x1F) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3);
+                uint32_t pix = ((const uint32_t*)data)[y * (pitch / 4) + x];
+                uint8_t r = pix & 0xFF, g = (pix >> 8) & 0xFF, b = (pix >> 16) & 0xFF;
+                color = 0xFF000000 | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
             } else {
-                uint16_t p = ((const uint16_t*)src)[y * (pitch/2) + x];
-                pixel = process_color((p >> 10) & 0x1F, (p >> 5) & 0x1F, p & 0x1F);
+                uint16_t pix = ((const uint16_t*)data)[y * (pitch / 2) + x];
+                uint8_t R = (pix >> 11) & 0x1F;
+                uint8_t G = (pix >> 5) & 0x3F;
+                uint8_t B = pix & 0x1F;
+                R = (R << 3) | (R >> 2);
+                G = (G << 2) | (G >> 4);
+                B = (B << 3) | (B >> 2);
+                color = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
             }
-
-            // Fill 3x3 block in destination (Nearest Neighbor)
-            for (int dy = 0; y * 3 + dy < height * 3 && dy < 3; dy++) {
-                uint32_t* line = dst + ((y * 3 + dy) * dst_w);
-                line[x * 3] = pixel;
-                line[x * 3 + 1] = pixel;
-                line[x * 3 + 2] = pixel;
-            }
-        }
-    }
-}
-
-/**
- * Direct 1:1 conversion for local hardware scaler.
- */
-void convert_and_copy_1x(uint32_t* dst, const void* src, unsigned width, unsigned height, size_t pitch, unsigned dst_stride) {
-    retro_pixel_format fmt = current_pixel_format.load();
-    if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-        const uint32_t* s32 = (const uint32_t*)src;
-        size_t s_stride = pitch / 4;
-        for (unsigned y = 0; y < height; y++) {
-            uint32_t* d = dst + (y * dst_stride);
-            const uint32_t* s = s32 + (y * s_stride);
-            for (unsigned x = 0; x < width; x++) {
-                uint32_t p = s[x];
-                d[x] = process_color((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
-            }
-        }
-    } else if (fmt == RETRO_PIXEL_FORMAT_RGB565) {
-        const uint16_t* s16 = (const uint16_t*)src;
-        size_t s_stride = pitch / 2;
-        for (unsigned y = 0; y < height; y++) {
-            uint32_t* d = dst + (y * dst_stride);
-            const uint16_t* s = s16 + (y * s_stride);
-            for (unsigned x = 0; x < width; x++) {
-                uint16_t p = s[x];
-                d[x] = process_color(((p >> 11) & 0x1F) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3);
-            }
-        }
-    } else {
-        const uint16_t* s15 = (const uint16_t*)src;
-        size_t s_stride = pitch / 2;
-        for (unsigned y = 0; y < height; y++) {
-            uint32_t* d = dst + (y * dst_stride);
-            const uint16_t* s = s15 + (y * s_stride);
-            for (unsigned x = 0; x < width; x++) {
-                uint16_t p = s[x];
-                d[x] = process_color((p >> 10) & 0x1F, (p >> 5) & 0x1F, p & 0x1F);
-            }
-        }
-    }
-}
-
-// --- LIBRETRO CALLBACKS ---
-void video_refresh_callback(const void *data, unsigned width, unsigned height, size_t pitch) {
-    if (!data || width == 0 || height == 0 || pitch == 0) return;
-
-    // 1. Local Rendering (1x Raw -> Hardware Scaler)
-    {
-        std::lock_guard<std::mutex> lock(window_mutex);
-        if (native_window) {
-            ANativeWindow_Buffer buffer;
-            if (ANativeWindow_lock(native_window, &buffer, nullptr) >= 0) {
-                unsigned copy_w = (width < (unsigned)buffer.width) ? width : (unsigned)buffer.width;
-                unsigned copy_h = (height < (unsigned)buffer.height) ? height : (unsigned)buffer.height;
-                convert_and_copy_1x((uint32_t*)buffer.bits, data, copy_w, copy_h, pitch, (unsigned)buffer.stride);
-                ANativeWindow_unlockAndPost(native_window);
-            }
+            if (y == 0 && x == 0) { uint8_t* b = (uint8_t*)&color; if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) { uint32_t raw = ((const uint32_t*)data)[0]; LOGI("FIRST_PIXEL: fmt=XRGB8888 raw=0x%08x R=%d G=%d B=%d LEbytes=[%02x %02x %02x %02x]", raw, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, b[0], b[1], b[2], b[3]); } else { uint16_t raw = ((const uint16_t*)data)[0]; uint8_t R = (raw>>11)&0x1F, G = (raw>>5)&0x3F, B = raw&0x1F; LOGI("FIRST_PIXEL: fmt=RGB565 raw=0x%04x R5=%d G6=%d B5=%d outR=%d outG=%d outB=%d LEbytes=[%02x %02x %02x %02x]", raw, R, G, B, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, b[0], b[1], b[2], b[3]); } }
+            *(uint32_t*)ptr = color;
+            ptr += 4;
         }
     }
 
-    // 2. WebRTC High-Fidelity Pipe (3x Integer Upscale -> Encoder)
-    if (g_nativeRetroObj && g_onNativeFrameMethod) {
-        JNIEnv* env;
-        if (g_vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_OK) {
-            unsigned upscale_w = width * 3;
-            unsigned upscale_h = height * 3;
-            size_t count = upscale_w * upscale_h;
-            
-            if (g_pixel_buffer_upscaled.size() < count) g_pixel_buffer_upscaled.resize(count);
-            
-            // Perform 3x Nearest Neighbor scaling for sharp text on TV
-            convert_and_upscale_3x((uint32_t*)g_pixel_buffer_upscaled.data(), data, width, height, pitch);
-
-            if (!g_pixel_array || env->GetArrayLength(g_pixel_array) < (jsize)count) {
-                if (g_pixel_array) env->DeleteGlobalRef(g_pixel_array);
-                jintArray localLocal = env->NewIntArray(count);
-                g_pixel_array = (jintArray)env->NewGlobalRef(localLocal);
-                env->DeleteLocalRef(localLocal);
-            }
-            env->SetIntArrayRegion(g_pixel_array, 0, count, (const jint*)g_pixel_buffer_upscaled.data());
-            env->CallVoidMethod(g_nativeRetroObj, g_onNativeFrameMethod, g_pixel_array, (jint)upscale_w, (jint)upscale_h);
-        }
-    }
+    JNIEnv* env; g_engine.jvm->AttachCurrentThread(&env, nullptr);
+    env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid, g_engine.argb_buf, (jint)w, (jint)h);
 }
 
-void audio_sample_callback(int16_t left, int16_t right) {
-    std::lock_guard<std::mutex> lock(audio_mutex);
-    g_audio_buffer.push_back(left);
-    g_audio_buffer.push_back(right);
-}
-
-size_t audio_sample_batch_callback(const int16_t *data, size_t frames) {
-    std::lock_guard<std::mutex> lock(audio_mutex);
-    g_audio_buffer.insert(g_audio_buffer.end(), data, data + (frames * 2));
-    return frames;
-}
-
-void input_poll_callback() {}
-
-int16_t input_state_callback(unsigned port, unsigned device, unsigned index, unsigned id) {
-    if (port == 0 && device == RETRO_DEVICE_JOYPAD) {
-        return (atomic_input_state.load() & (1 << id)) ? 1 : 0;
-    }
-    return 0;
-}
-
-bool environment_callback(unsigned cmd, void *data) {
+size_t audio_batch_cb(const int16_t *d, size_t f) { g_engine.audio_rb.write(d, f * 2); return f; }
+int16_t input_state_cb(unsigned p, unsigned d, unsigned i, unsigned id) { return (p==0 && d==RETRO_DEVICE_JOYPAD) ? ((g_engine.input_state.load() & (1<<id))?1:0) : (int16_t)0; }
+bool env_cb(unsigned cmd, void *data) {
     switch (cmd) {
-        case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
-            current_pixel_format.store(*(const enum retro_pixel_format *)data);
-            return true;
-        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: {
-            auto cb = (struct retro_log_callback *)data;
-            cb->log = cb_log;
-            return true;
+        case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: { retro_pixel_format pf = *(const retro_pixel_format *)data; g_engine.pixel_fmt.store(pf); LOGI("SET_PIXEL_FORMAT: %d (0=0RGB1555, 1=XRGB8888, 2=RGB565)", pf); return true; }
+        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: ((struct retro_log_callback *)data)->log = libretro_log; return true;
+        case RETRO_ENVIRONMENT_GET_VARIABLE: { auto *v = (struct retro_variable *)data; if (v->key && strcmp(v->key, "mgba_color_correction") == 0) { v->value = "GBA"; return true; } return false; }
+        case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: *(const char**)data = g_engine.system_dir.c_str(); return true;
+        case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: *(const char**)data = g_engine.save_dir.c_str(); return true;
+        case RETRO_ENVIRONMENT_GET_CAN_DUPE: *(bool*)data = true; return true;
+    }
+    return false;
+}
+
+extern "C" {
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_init(JNIEnv* env, jobject, jstring path) {
+    LOGI("=== init() called ===");
+    const char* p = env->GetStringUTFChars(path, nullptr); g_engine.core_handle = dlopen(p, RTLD_LAZY); env->ReleaseStringUTFChars(path, p);
+    LOGI("init: dlopen(%s) = %p", p, g_engine.core_handle);
+    ((retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment"))(env_cb);
+    ((retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh"))(video_refresh_cb);
+    ((retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch"))(audio_batch_cb);
+    ((retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state"))(input_state_cb);
+    ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
+    g_engine.get_mem_data = (decltype(g_engine.get_mem_data))dlsym(g_engine.core_handle, "retro_get_memory_data");
+    g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
+    ((retro_init_t)dlsym(g_engine.core_handle, "retro_init"))();
+
+    static class AC : public oboe::AudioStreamCallback {
+        oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* d, int32_t f) override {
+            int16_t *o = (int16_t*)d; size_t r = g_engine.audio_rb.read(o, f*2);
+            if (r < (size_t)f*2) memset(o+r, 0, (f*2-r)*2); g_engine.audio_cv.notify_one(); return oboe::DataCallbackResult::Continue;
         }
-        case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
-        case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
-            *(const char **)data = ".";
-            return true;
-        default:
-            return false;
+    } ac;
+    oboe::AudioStreamBuilder b; b.setDirection(oboe::Direction::Output)->setPerformanceMode(oboe::PerformanceMode::LowLatency)->setFormat(oboe::AudioFormat::I16)->setChannelCount(oboe::ChannelCount::Stereo)->setSampleRate(44100)->setCallback(&ac);
+    b.openStream(g_engine.audio_stream); g_engine.audio_stream->requestStart();
+}
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
+    if (!g_engine.get_mem_data || g_engine.rom_path.empty()) return;
+    void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); size_t s = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
+    if (d && s > 0) { std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav"; std::ofstream f(p, std::ios::binary); if (f.is_open()) { f.write((const char*)d, s); f.close(); } }
+}
+
+JNIEXPORT jboolean JNICALL Java_com_sharescreen_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
+    LOGI("loadGame called");
+    const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;
+    struct retro_game_info info = { p, nullptr, 0, nullptr }; bool ok = ((bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game"))(&info);
+    LOGI("loadGame: retro_load_game returned %d", ok);
+    if (ok) { std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav"; std::ifstream f(sp, std::ios::binary); if (f.is_open()) { void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); if (d) f.read((char*)d, g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM)); f.close(); } }
+    env->ReleaseStringUTFChars(path, p); g_engine.core_run = (retro_run_t)dlsym(g_engine.core_handle, "retro_run"); LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
+}
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, jobject) {
+    g_engine.emu_running = true;
+    g_engine.emu_thread = std::thread([]{ constexpr auto frame_dur = std::chrono::nanoseconds(16666667); while(g_engine.emu_running){ auto start = std::chrono::steady_clock::now(); { std::lock_guard<std::recursive_mutex> l(g_engine.core_mutex); if(g_engine.core_run) g_engine.core_run(); } auto elapsed = std::chrono::steady_clock::now() - start; if(elapsed < frame_dur) std::this_thread::sleep_for(frame_dur - elapsed); } });
+}
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels) {
+    if(g_engine.callback_obj) env->DeleteGlobalRef(g_engine.callback_obj);
+    if(g_engine.argb_buf) env->DeleteGlobalRef(g_engine.argb_buf);
+    if(cb) {
+        g_engine.callback_obj = env->NewGlobalRef(cb);
+        g_engine.argb_buf = env->NewGlobalRef(pixels);
+        g_engine.argb_ptr = (uint8_t*)env->GetDirectBufferAddress(pixels);
+        env->GetJavaVM(&g_engine.jvm);
+        g_engine.on_frame_mid = env->GetMethodID(env->GetObjectClass(cb), "onFrameReady", "(Ljava/nio/ByteBuffer;II)V");
+    } else {
+        g_engine.callback_obj = nullptr;
+        g_engine.argb_buf = nullptr;
+        g_engine.argb_ptr = nullptr;
     }
 }
 
-// --- JNI EXPORTS ---
-extern "C" JNIEXPORT void JNICALL
-Java_com_sharescreen_emulator_NativeRetro_setInputState(JNIEnv* env, jobject thiz, jint port, jint device, jint index, jint id, jint value) {
-    if (port == 0) {
-        uint16_t current = atomic_input_state.load();
-        if (value) current |= (1 << id);
-        else current &= ~(1 << id);
-        atomic_input_state.store(current);
-    }
-}
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) { LOGI("setInputState: %d", s); g_engine.input_state = (uint16_t)s; }
 
-extern "C" JNIEXPORT void JNICALL
-Java_com_sharescreen_emulator_NativeRetro_setSurface(JNIEnv* env, jobject thiz, jobject surface) {
-    std::lock_guard<std::mutex> lock(window_mutex);
-    if (native_window) { ANativeWindow_release(native_window); native_window = nullptr; }
-    if (surface) {
-        native_window = ANativeWindow_fromSurface(env, surface);
-        ANativeWindow_setBuffersGeometry(native_window, 240, 160, WINDOW_FORMAT_RGBA_8888);
-    }
-    if (!g_nativeRetroObj) {
-        g_nativeRetroObj = env->NewGlobalRef(thiz);
-        jclass clazz = env->GetObjectClass(thiz);
-        g_onNativeFrameMethod = env->GetMethodID(clazz, "onNativeFrame", "([III)V");
-    }
-}
-
-void unload_current_core() {
-    if (core_handle) {
-        if (core_unload_game_ptr) core_unload_game_ptr();
-        auto deinit = (retro_deinit_t)dlsym(core_handle, "retro_deinit");
-        if (deinit) deinit();
-        dlclose(core_handle);
-        core_handle = nullptr;
-        core_run = nullptr;
-        core_unload_game_ptr = nullptr;
-    }
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_sharescreen_emulator_NativeRetro_loadCore(JNIEnv* env, jobject thiz, jstring corePath) {
-    std::lock_guard<std::recursive_mutex> lock(core_mutex);
-    const char *path = env->GetStringUTFChars(corePath, nullptr);
-    unload_current_core();
-    core_handle = dlopen(path, RTLD_LAZY);
-    if (!core_handle) { env->ReleaseStringUTFChars(corePath, path); return JNI_FALSE; }
-    auto set_env = (retro_set_environment_t)dlsym(core_handle, "retro_set_environment");
-    auto set_video = (retro_set_video_refresh_t)dlsym(core_handle, "retro_set_video_refresh");
-    auto set_audio = (retro_set_audio_sample_batch_t)dlsym(core_handle, "retro_set_audio_sample_batch");
-    auto set_input_poll = (retro_set_input_poll_t)dlsym(core_handle, "retro_set_input_poll");
-    auto set_input_state = (retro_set_input_state_t)dlsym(core_handle, "retro_set_input_state");
-    core_run = (retro_run_t)dlsym(core_handle, "retro_run");
-    core_unload_game_ptr = (retro_unload_game_t)dlsym(core_handle, "retro_unload_game");
-    if (set_env) set_env(environment_callback);
-    if (set_video) set_video(video_refresh_callback);
-    if (set_audio) set_audio(audio_sample_batch_callback);
-    if (set_input_poll) set_input_poll(input_poll_callback);
-    if (set_input_state) set_input_state(input_state_callback);
-    auto init = (retro_init_t)dlsym(core_handle, "retro_init");
-    if (init) init();
-    env->ReleaseStringUTFChars(corePath, path);
-    return JNI_TRUE;
-}
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_sharescreen_emulator_NativeRetro_loadGame(JNIEnv* env, jobject thiz, jstring gamePath) {
-    std::lock_guard<std::recursive_mutex> lock(core_mutex);
-    auto load = (retro_load_game_t)dlsym(core_handle, "retro_load_game");
-    if (!load) return JNI_FALSE;
-    const char *path = env->GetStringUTFChars(gamePath, nullptr);
-    struct retro_game_info info = {0};
-    info.path = path;
-    bool success = load(&info);
-    env->ReleaseStringUTFChars(gamePath, path);
-    return success ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_sharescreen_emulator_NativeRetro_runFrame(JNIEnv* env, jobject thiz) {
-    std::lock_guard<std::recursive_mutex> lock(core_mutex);
-    if (core_run) core_run();
-}
-
-extern "C" JNIEXPORT jshortArray JNICALL
-Java_com_sharescreen_emulator_NativeRetro_pullAudio(JNIEnv* env, jobject thiz) {
-    std::lock_guard<std::mutex> lock(audio_mutex);
-    if (g_audio_buffer.empty()) return nullptr;
-    jshortArray result = env->NewShortArray(g_audio_buffer.size());
-    env->SetShortArrayRegion(result, 0, g_audio_buffer.size(), (const jshort*)g_audio_buffer.data());
-    g_audio_buffer.clear();
-    return result;
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject /* this */) {
-    return env->NewStringUTF("RetroCast Engine v2.1 (3x Integer Upscale)");
+JNIEXPORT jstring JNICALL Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject) { return env->NewStringUTF("Zenith Engine v5.0"); }
 }

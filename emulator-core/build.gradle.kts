@@ -15,6 +15,7 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("")
+                arguments("-DANDROID_STL=c++_shared")
             }
         }
     }
@@ -38,9 +39,13 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+    buildFeatures {
+        prefab = true
+    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("com.google.oboe:oboe:1.8.1")
     testImplementation("junit:junit:4.13.2")
 }

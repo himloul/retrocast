@@ -2,56 +2,64 @@ package com.sharescreen.console
 
 import android.app.Presentation
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.Display
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import com.sharescreen.emulator.NativeRetro
+import java.nio.ByteBuffer
 
 class GamePresentation(
     outerContext: Context,
-    display: Display,
-    private val nativeRetro: NativeRetro
+    display: Display
 ) : Presentation(outerContext, display) {
 
-    private lateinit var surfaceView: SurfaceView
+    private lateinit var gameView: GameView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        gameView = GameView(context)
+        setContentView(gameView, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+    }
 
-        // Create a full-screen container
-        val root = FrameLayout(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(android.graphics.Color.BLACK)
+    fun setFrame(pixels: ByteBuffer, width: Int, height: Int) {
+        gameView.setFrame(pixels, width, height)
+    }
+
+    private class GameView(context: Context) : View(context) {
+        private var frameBitmap: Bitmap? = null
+        private val paint = Paint().apply { isFilterBitmap = false }
+        private val destRect = Rect()
+
+        fun setFrame(pixels: ByteBuffer, width: Int, height: Int) {
+            val bitmap = frameBitmap
+            if (bitmap == null || bitmap.width != width || bitmap.height != height) {
+                frameBitmap?.recycle()
+                frameBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            }
+            pixels.rewind()
+            frameBitmap!!.copyPixelsFromBuffer(pixels)
+            postInvalidate()
         }
 
-        surfaceView = SurfaceView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
+        override fun onDraw(canvas: Canvas) {
+            val bitmap = frameBitmap ?: return
+            val w = width; val h = height
+            val bw = bitmap.width; val bh = bitmap.height
+            if (w <= 0 || h <= 0 || bw <= 0 || bh <= 0) return
+
+            val scale = Math.min(w / bw, h / bh)
+            val dw = bw * scale; val dh = bh * scale
+            val dx = (w - dw) / 2; val dy = (h - dh) / 2
+            destRect.set(dx, dy, dx + dw, dy + dh)
+            canvas.drawBitmap(bitmap, null, destRect, paint)
         }
-
-        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
-                nativeRetro.setSurface(holder.surface)
-            }
-
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                nativeRetro.setSurface(holder.surface)
-            }
-
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
-                nativeRetro.setSurface(null)
-            }
-        })
-
-        root.addView(surfaceView)
-        setContentView(root)
     }
 }

@@ -43,15 +43,15 @@ fun TouchpadController(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             CircleControlButton(label = "L") { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 10, if (pressed) 1 else 0)
+                nativeRetro.setButton(10, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
 
             GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
-                DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 8.dp), 4) { nativeRetro.setInputState(0, 1, 0, 4, it); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-8).dp), 5) { nativeRetro.setInputState(0, 1, 0, 5, it); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 8.dp), 6) { nativeRetro.setInputState(0, 1, 0, 6, it); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-8).dp), 7) { nativeRetro.setInputState(0, 1, 0, 7, it); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 8.dp), 4) { nativeRetro.setButton(4, it > 0); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-8).dp), 5) { nativeRetro.setButton(5, it > 0); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 8.dp), 6) { nativeRetro.setButton(6, it > 0); if(it > 0) hapticManager.triggerTick() }
+                DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-8).dp), 7) { nativeRetro.setButton(7, it > 0); if(it > 0) hapticManager.triggerTick() }
             }
         }
 
@@ -65,16 +65,16 @@ fun TouchpadController(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             CircleControlButton(label = "R") { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 11, if (pressed) 1 else 0)
+                nativeRetro.setButton(11, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
 
             GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
                 ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), Color(0xFFEF9A9A)) { 
-                    nativeRetro.setInputState(0, 1, 0, 8, it); if (it > 0) hapticManager.triggerClick() 
+                    nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
                 }
                 ActionCircle("B", Modifier.align(Alignment.Center).offset(x = (-22).dp, y = 22.dp), Color(0xFFFFF59D)) { 
-                    nativeRetro.setInputState(0, 1, 0, 0, it); if (it > 0) hapticManager.triggerClick() 
+                    nativeRetro.setButton(0, it > 0); if (it > 0) hapticManager.triggerClick() 
                 }
             }
         }
@@ -87,11 +87,11 @@ fun TouchpadController(
             horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             IconPillButton(Icons.Default.HorizontalRule) { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 2, if (pressed) 1 else 0)
+                nativeRetro.setButton(2, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
             IconPillButton(Icons.Default.PlayArrow) { pressed ->
-                nativeRetro.setInputState(0, 1, 0, 3, if (pressed) 1 else 0)
+                nativeRetro.setButton(3, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
         }
@@ -118,7 +118,7 @@ fun DPadCircle(modifier: Modifier, id: Int, onInput: (Int) -> Unit) {
             .clip(CircleShape)
             .background(if (isPressed) Color.White.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f))
             .border(1.dp, Color.White.copy(alpha = if (isPressed) 0.6f else 0.15f), CircleShape)
-            .pointerInput(Unit) {
+            .pointerInput(id) {
                 awaitEachGesture {
                     awaitFirstDown()
                     isPressed = true; onInput(1)

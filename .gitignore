@@ -20,3 +20,11 @@ output.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Temp & recovery
+*_recovered.txt
+checkpoint-*.json
+logcat_output.txt
+
+# Docs
+plans/
