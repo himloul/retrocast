@@ -5,7 +5,6 @@ import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import io.ktor.utils.io.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -65,7 +64,7 @@ object CoreDownloader {
             tempZip.delete()
             return@withContext true
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("CoreDownloader", "Failed to download core: $coreName", e)
             tempZip.delete()
             return@withContext false
         }

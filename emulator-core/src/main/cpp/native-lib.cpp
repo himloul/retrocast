@@ -62,8 +62,10 @@ struct ZenithEngine {
     JavaVM* jvm = nullptr;
     jobject callback_obj = nullptr;
     jobject argb_buf = nullptr;
+    jobject i420_buf = nullptr;
     jmethodID on_frame_mid = nullptr;
     uint8_t* argb_ptr = nullptr;
+    uint8_t* i420_ptr = nullptr;
     std::shared_ptr<oboe::AudioStream> audio_stream;
 };
 static ZenithEngine g_engine;
@@ -71,12 +73,10 @@ static ZenithEngine g_engine;
 static void libretro_log(enum retro_log_level, const char *fmt, ...) { va_list a; va_start(a,fmt); __android_log_vprint(ANDROID_LOG_INFO,"Libretro",fmt,a); va_end(a); }
 
 void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
-    if (!data || !g_engine.argb_ptr) { LOGE("video_refresh_cb: no data or argb_ptr null (data=%p argb_ptr=%p)", data, g_engine.argb_ptr); return; }
+    if (!data || !g_engine.argb_ptr) return;
 
     retro_pixel_format fmt = g_engine.pixel_fmt.load();
-    LOGI("video_refresh_cb fmt=%d w=%u h=%u pitch=%zu", fmt, w, h, pitch);
-
-    uint8_t* ptr = g_engine.argb_ptr;
+    uint8_t* argb = g_engine.argb_ptr;
 
     for (unsigned y = 0; y < h; y++) {
         for (unsigned x = 0; x < w; x++) {
@@ -95,14 +95,41 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
                 B = (B << 3) | (B >> 2);
                 color = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
             }
-            if (y == 0 && x == 0) { uint8_t* b = (uint8_t*)&color; if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) { uint32_t raw = ((const uint32_t*)data)[0]; LOGI("FIRST_PIXEL: fmt=XRGB8888 raw=0x%08x R=%d G=%d B=%d LEbytes=[%02x %02x %02x %02x]", raw, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, b[0], b[1], b[2], b[3]); } else { uint16_t raw = ((const uint16_t*)data)[0]; uint8_t R = (raw>>11)&0x1F, G = (raw>>5)&0x3F, B = raw&0x1F; LOGI("FIRST_PIXEL: fmt=RGB565 raw=0x%04x R5=%d G6=%d B5=%d outR=%d outG=%d outB=%d LEbytes=[%02x %02x %02x %02x]", raw, R, G, B, (color>>16)&0xFF, (color>>8)&0xFF, color&0xFF, b[0], b[1], b[2], b[3]); } }
-            *(uint32_t*)ptr = color;
-            ptr += 4;
+            *(uint32_t*)argb = color;
+            argb += 4;
+        }
+    }
+
+    if (g_engine.i420_ptr) {
+        uint8_t* y_plane = g_engine.i420_ptr;
+        uint8_t* u_plane = g_engine.i420_ptr + w * h;
+        uint8_t* v_plane = u_plane + (w / 2) * (h / 2);
+        uint32_t* argb_pixels = (uint32_t*)g_engine.argb_ptr;
+
+        for (unsigned y = 0; y < h; y++) {
+            for (unsigned x = 0; x < w; x++) {
+                uint32_t pixel = argb_pixels[y * w + x];
+                int r = pixel & 0xFF;
+                int g = (pixel >> 8) & 0xFF;
+                int b = (pixel >> 16) & 0xFF;
+
+                int yy = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+                y_plane[y * w + x] = (uint8_t)(yy < 0 ? 0 : yy > 255 ? 255 : yy);
+
+                if ((y & 1) == 0 && (x & 1) == 0) {
+                    int uu = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+                    int vv = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                    u_plane[(y / 2) * (w / 2) + (x / 2)] = (uint8_t)(uu < 0 ? 0 : uu > 255 ? 255 : uu);
+                    v_plane[(y / 2) * (w / 2) + (x / 2)] = (uint8_t)(vv < 0 ? 0 : vv > 255 ? 255 : vv);
+                }
+            }
         }
     }
 
     JNIEnv* env; g_engine.jvm->AttachCurrentThread(&env, nullptr);
-    env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid, g_engine.argb_buf, (jint)w, (jint)h);
+    env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid,
+        g_engine.argb_buf, (jint)w, (jint)h,
+        g_engine.i420_buf, (jint)w, (jint)(w / 2));
 }
 
 size_t audio_batch_cb(const int16_t *d, size_t f) { g_engine.audio_rb.write(d, f * 2); return f; }
@@ -167,19 +194,24 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, 
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels) {
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
     if(g_engine.callback_obj) env->DeleteGlobalRef(g_engine.callback_obj);
     if(g_engine.argb_buf) env->DeleteGlobalRef(g_engine.argb_buf);
+    if(g_engine.i420_buf) env->DeleteGlobalRef(g_engine.i420_buf);
     if(cb) {
         g_engine.callback_obj = env->NewGlobalRef(cb);
         g_engine.argb_buf = env->NewGlobalRef(pixels);
         g_engine.argb_ptr = (uint8_t*)env->GetDirectBufferAddress(pixels);
+        g_engine.i420_buf = env->NewGlobalRef(i420);
+        g_engine.i420_ptr = (uint8_t*)env->GetDirectBufferAddress(i420);
         env->GetJavaVM(&g_engine.jvm);
-        g_engine.on_frame_mid = env->GetMethodID(env->GetObjectClass(cb), "onFrameReady", "(Ljava/nio/ByteBuffer;II)V");
+        g_engine.on_frame_mid = env->GetMethodID(env->GetObjectClass(cb), "onFrameReady", "(Ljava/nio/ByteBuffer;IILjava/nio/ByteBuffer;II)V");
     } else {
         g_engine.callback_obj = nullptr;
         g_engine.argb_buf = nullptr;
         g_engine.argb_ptr = nullptr;
+        g_engine.i420_buf = nullptr;
+        g_engine.i420_ptr = nullptr;
     }
 }
 

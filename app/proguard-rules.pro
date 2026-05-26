@@ -1,0 +1,4 @@
+-keep class org.webrtc.** { *; }
+-keep class com.sharescreen.emulator.** { *; }
+-keep class com.sharescreen.streaming.** { *; }
+-keep class com.sharescreen.console.** { *; }

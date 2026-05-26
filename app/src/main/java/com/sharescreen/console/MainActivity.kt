@@ -5,9 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
-import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
 import android.net.Uri
 import android.os.Bundle
 import android.view.Display
@@ -50,7 +47,7 @@ import java.nio.ByteBuffer
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
     private lateinit var hapticManager: HapticFeedbackManager
     private lateinit var nativeRetro: NativeRetro
-    private lateinit var streamingManager: StreamingManager
+    private var streamingManager: StreamingManager? = null
     private var videoCapturer = LibretroVideoCapturer()
     
     private var signalingServer: SignalingServer? = null
@@ -66,6 +63,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
     private var isCoreReady = false
 
     private var pixelBuffer: ByteBuffer? = null
+    private var i420Buffer: ByteBuffer? = null
 
     private val saveHandler = Handler(Looper.getMainLooper())
     private val saveRunnable = object : Runnable {
@@ -100,40 +98,24 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
         }
     }
 
-    override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int) {
+    override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int) {
         emulatorView?.setFrame(pixels, width, height)
         nativePresentation?.setFrame(pixels, width, height)
         if (!isCasting) return
 
-        val i420 = JavaI420Buffer.allocate(width, height)
-        val yData = i420.dataY
-        val uData = i420.dataU
-        val vData = i420.dataV
-        val yStride = i420.strideY
-        val uStride = i420.strideU
-        val vStride = i420.strideV
+        val i420Buffer = JavaI420Buffer.allocate(width, height)
+        i420.rewind()
+        val ySize = yStride * height
+        val uvSize = uvStride * (height / 2)
 
-        pixels.rewind()
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                val r = pixels.get().toInt() and 0xFF
-                val g = pixels.get().toInt() and 0xFF
-                val b = pixels.get().toInt() and 0xFF
-                pixels.get() // skip alpha
+        i420.position(0).limit(ySize)
+        i420Buffer.dataY.put(i420.slice())
+        i420.position(ySize).limit(ySize + uvSize)
+        i420Buffer.dataU.put(i420.slice())
+        i420.position(ySize + uvSize).limit(ySize + uvSize * 2)
+        i420Buffer.dataV.put(i420.slice())
 
-                val yy = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
-                yData.put(y * yStride + x, yy.toByte())
-
-                if (y % 2 == 0 && x % 2 == 0) {
-                    val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
-                    val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
-                    uData.put((y / 2) * uStride + (x / 2), u.toByte())
-                    vData.put((y / 2) * vStride + (x / 2), v.toByte())
-                }
-            }
-        }
-
-        val frame = VideoFrame(i420, 0, System.nanoTime())
+        val frame = VideoFrame(i420Buffer, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
         frame.release()
     }
@@ -143,9 +125,10 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
         super.onCreate(savedInstanceState)
         hapticManager = HapticFeedbackManager(this)
         nativeRetro = NativeRetro()
-        streamingManager = StreamingManager(this)
         
-        pixelBuffer = ByteBuffer.allocateDirect(512 * 512 * 4)
+        val maxPixels = 512 * 512
+        pixelBuffer = ByteBuffer.allocateDirect(maxPixels * 4)
+        i420Buffer = ByteBuffer.allocateDirect(maxPixels * 3 / 2)
 
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.registerDisplayListener(displayListener, null)
@@ -301,45 +284,53 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
                     nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
 
                     nativeRetro.init(coreFile.absolutePath)
-                    pixelBuffer?.let { nativeRetro.setCallback(this@MainActivity, it) }
+                    if (pixelBuffer != null && i420Buffer != null) {
+                        nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+                    }
                     if (nativeRetro.loadGame(romFile.absolutePath)) {
                         loadedRomPath = romFile.absolutePath
                         isCoreReady = true
                         nativeRetro.start()
                     }
                 }
-            } catch (e: Exception) { isDownloading = false }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to load ROM", e)
+                isDownloading = false
+            }
         }
     }
 
     private fun extractRomFromZip(zipFile: File): File? {
         val supported = listOf("gba")
         try {
-            val zis = java.util.zip.ZipInputStream(zipFile.inputStream())
-            var entry = zis.nextEntry
-            while (entry != null) {
-                val ext = entry.name.substringAfterLast('.', "").lowercase()
-                if (supported.contains(ext) && !entry.isDirectory) {
-                    val out = File(filesDir, entry.name)
-                    out.outputStream().use { zis.copyTo(it) }; zis.closeEntry(); zis.close(); return out
+            java.util.zip.ZipInputStream(zipFile.inputStream()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val ext = entry.name.substringAfterLast('.', "").lowercase()
+                    if (supported.contains(ext) && !entry.isDirectory) {
+                        val out = File(filesDir, entry.name)
+                        out.outputStream().use { zis.copyTo(it) }
+                        return out
+                    }
+                    entry = zis.nextEntry
                 }
-                zis.closeEntry(); entry = zis.nextEntry
             }
-            zis.close()
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to extract ROM from ZIP", e)
+        }
         return null
     }
 
     private fun toggleCasting() {
         if (isCasting) {
-            signalingServer?.stop(); signalingServer = null; streamingManager.dispose(); isCasting = false; castUrl = ""
+            signalingServer?.stop(); signalingServer = null; streamingManager?.dispose(); streamingManager = null; isCasting = false; castUrl = ""
         } else {
             val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
             if (ip == null) return
             castUrl = "http://$ip:$port"
-            streamingManager.dispose(); streamingManager = StreamingManager(this)
+            val sm = StreamingManager(this).also { streamingManager = it }
 
-            streamingManager.createPeerConnection(object : PeerConnection.Observer {
+            sm.createPeerConnection(object : PeerConnection.Observer {
                 override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
                 override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
                 override fun onIceConnectionReceivingChange(p0: Boolean) {}
@@ -357,11 +348,11 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
                 override fun onRenegotiationNeeded() {}
                 override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
             })
-            streamingManager.startStreaming(videoCapturer)
+            sm.startStreaming(videoCapturer)
             signalingServer = SignalingServer(this, port).apply {
                 start(
                     onClientConnected = {
-                        streamingManager.createOffer { offer ->
+                        sm.createOffer { offer ->
                             offer?.let {
                                 val json = JSONObject().apply { put("type", "offer"); put("sdp", it.description) }
                                 lifecycleScope.launch { signalingServer?.sendMessage(json.toString()) }
@@ -372,10 +363,10 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
                         val json = JSONObject(sdpJson)
                         if (json.has("type") && json.getString("type") == "answer") {
                             val sdp = SessionDescription(SessionDescription.Type.ANSWER, json.getString("sdp"))
-                            streamingManager.setRemoteDescription(sdp) { _ -> }
+                            sm.setRemoteDescription(sdp) { _ -> }
                         } else if (json.has("candidate")) {
                             val candidate = IceCandidate(json.getString("sdpMid"), json.getInt("sdpMLineIndex"), json.getString("candidate"))
-                            streamingManager.addIceCandidate(candidate)
+                            sm.addIceCandidate(candidate)
                         }
                     }
                 )
@@ -396,7 +387,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
         saveHandler.removeCallbacks(saveRunnable)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.unregisterDisplayListener(displayListener); nativePresentation?.dismiss()
-        nativeRetro.stop(); signalingServer?.stop(); streamingManager.dispose()
+        nativeRetro.stop(); signalingServer?.stop(); streamingManager?.dispose()
     }
 
 }

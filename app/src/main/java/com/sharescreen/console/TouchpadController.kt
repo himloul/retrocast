@@ -30,14 +30,12 @@ fun TouchpadController(
     hapticManager: HapticFeedbackManager,
     isLandscape: Boolean
 ) {
-    // STAFF: Ensuring the controller Box has zero background to act as a pure overlay
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         
         // --- LEFT CLUSTER (L + DPAD) ---
         Column(
             modifier = Modifier
                 .align(if (isLandscape) Alignment.CenterStart else Alignment.BottomStart)
-                // STAFF: Increased landscape padding to 64dp to pull controls OVER the 3:2 game screen
                 .padding(start = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -59,7 +57,6 @@ fun TouchpadController(
         Column(
             modifier = Modifier
                 .align(if (isLandscape) Alignment.CenterEnd else Alignment.BottomEnd)
-                // STAFF: Increased landscape padding to 64dp to pull controls OVER the 3:2 game screen
                 .padding(end = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)

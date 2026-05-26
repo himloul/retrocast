@@ -22,7 +22,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -72,9 +73,6 @@ dependencies {
     implementation("io.ktor:ktor-client-core:2.3.6")
     implementation("io.ktor:ktor-client-okhttp:2.3.6")
 
-    // QR Code generation for easy pairing
-
-    implementation("com.google.zxing:core:3.5.2")
     
     // WebRTC for streaming
     implementation("com.github.webrtc-sdk:android:104.5112.01")

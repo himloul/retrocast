@@ -1,6 +1,5 @@
 package com.sharescreen.emulator
 
-import android.view.Surface
 import java.nio.ByteBuffer
 
 class NativeRetro {
@@ -11,7 +10,7 @@ class NativeRetro {
     }
 
     interface FrameCallback {
-        fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int)
+        fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int)
     }
 
     external fun getCoreVersion(): String
@@ -37,7 +36,7 @@ class NativeRetro {
         setInputState(currentInputMask)
     }
 
-    external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?)
+    external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?, i420: ByteBuffer?)
 
     external fun setPaths(systemPath: String, savePath: String)
 

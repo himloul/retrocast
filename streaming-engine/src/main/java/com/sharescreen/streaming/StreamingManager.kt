@@ -4,7 +4,6 @@ import android.content.Context
 import org.webrtc.*
 import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
-import java.nio.ByteBuffer
 
 class StreamingManager(private val context: Context) {
     private val rootEglBase: EglBase = EglBase.create()
@@ -96,9 +95,6 @@ class StreamingManager(private val context: Context) {
             override fun onCreateFailure(p0: String?) {}
             override fun onSetFailure(p0: String?) { callback(false) }
         }, mangledSdp)
-    }
-
-    fun pushAudio(samples: ShortArray) {
     }
 
     fun addIceCandidate(candidate: IceCandidate) {

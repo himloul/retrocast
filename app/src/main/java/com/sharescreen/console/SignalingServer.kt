@@ -11,6 +11,7 @@ import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.server.html.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.runBlocking
 import kotlinx.html.*
 import java.time.Duration
 
@@ -22,9 +23,7 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
     private val tag = "SignalingServer"
 
     fun start(onClientConnected: () -> Unit, onSdpReceived: (String) -> Unit) {
-        val serverPort = if (port > 0) port else 8080
-        
-        server = embeddedServer(Netty, port = serverPort) {
+        server = embeddedServer(Netty, port = port) {
             install(WebSockets) {
                 pingPeriod = Duration.ofSeconds(15)
                 timeout = Duration.ofSeconds(15)
@@ -131,7 +130,9 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
         }
         
         server?.start(wait = false)
-        try { registerService(serverPort) } catch (e: Exception) {}
+        try { registerService(port) } catch (e: Exception) {
+            Log.e(tag, "mDNS registration failed", e)
+        }
     }
 
     private fun registerService(servicePort: Int) {
@@ -159,6 +160,13 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
     }
 
     fun stop() {
-        try { server?.stop(500, 1000) } catch (e: Exception) {}
+        try {
+            runBlocking { currentSession?.close() }
+        } catch (e: Exception) {
+            Log.e(tag, "Error closing session", e)
+        }
+        try { server?.stop(500, 1000) } catch (e: Exception) {
+            Log.e(tag, "Error stopping server", e)
+        }
     }
 }
