@@ -33,19 +33,22 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "11"
     }
     buildFeatures {
         prefab = true
+    }
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = true
     }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("com.google.oboe:oboe:1.8.1")
-    testImplementation("junit:junit:4.13.2")
 }

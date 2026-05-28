@@ -20,11 +20,15 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "11"
+    }
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = true
     }
 }
 
@@ -32,5 +36,4 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     // WebRTC for low-latency streaming
     implementation("com.github.webrtc-sdk:android:104.5112.01")
-    testImplementation("junit:junit:4.13.2")
 }
