@@ -98,7 +98,13 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                                             const src = audioCtx.createBufferSource();
                                                             src.buffer = buffer;
                                                             src.connect(audioCtx.destination);
-                                                            if (audioScheduledTime < audioCtx.currentTime) audioScheduledTime = audioCtx.currentTime + 0.01;
+
+                                                            const now = audioCtx.currentTime;
+                                                            if (audioScheduledTime < now) {
+                                                                audioScheduledTime = now + 0.05;
+                                                            } else if (audioScheduledTime - now > 0.5) {
+                                                                audioScheduledTime = now + 0.05;
+                                                            }
                                                             src.start(audioScheduledTime);
                                                             audioScheduledTime += buffer.duration;
                                                         } catch (err) {

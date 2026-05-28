@@ -137,6 +137,7 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
 }
 
 size_t audio_batch_cb(const int16_t *d, size_t f) {
+    LOGI("audio_batch_cb: frames=%zu, muted=%d, cb_obj=%p, audio_buf=%p", f, g_engine.local_audio_muted.load(), (void*)g_engine.audio_cb_obj, (void*)g_engine.audio_buf);
     if (!g_engine.local_audio_muted.load()) {
         g_engine.audio_rb.write(d, f * 2);
     }
@@ -145,11 +146,17 @@ size_t audio_batch_cb(const int16_t *d, size_t f) {
         g_engine.jvm->AttachCurrentThread(&env, nullptr);
         size_t num_samples = f * 2;
         jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
+        LOGI("audio_batch_cb: num_samples=%zu, cap=%d, bytes_needed=%zu", num_samples, cap, num_samples * 2);
         if ((jsize)(num_samples * 2) <= cap) {
             void* buf_ptr = env->GetDirectBufferAddress(g_engine.audio_buf);
             memcpy(buf_ptr, d, num_samples * 2);
             env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)num_samples);
+            LOGI("audio_batch_cb: JNI callback done");
+        } else {
+            LOGE("audio_batch_cb: buffer too small! need=%zu, cap=%d", num_samples * 2, cap);
         }
+    } else {
+        LOGI("audio_batch_cb: skipping JNI callback (cb_obj=%p, audio_buf=%p)", (void*)g_engine.audio_cb_obj, (void*)g_engine.audio_buf);
     }
     return f;
 }

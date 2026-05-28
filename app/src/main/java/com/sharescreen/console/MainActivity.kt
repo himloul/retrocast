@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     override fun onAudioReady(buffer: ByteBuffer, samples: Int) {
+        android.util.Log.d("Audio", "onAudioReady: samples=$samples, streamingManager=${streamingManager}")
         streamingManager?.sendAudio(buffer, samples)
     }
 
