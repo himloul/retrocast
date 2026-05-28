@@ -58,14 +58,6 @@ class StreamingManager(private val context: Context) {
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
 
         audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
-        Log.d("Audio", "startStreaming: audioDataChannel=$audioDataChannel")
-        audioDataChannel?.registerObserver(object : DataChannel.Observer {
-            override fun onBufferedAmountChange(p0: Long) {}
-            override fun onStateChange() {
-                Log.d("Audio", "DataChannel state: ${audioDataChannel?.state()}")
-            }
-            override fun onMessage(p0: DataChannel.Buffer) {}
-        })
     }
 
     private fun mangleSdp(sdp: String): String {
@@ -108,22 +100,15 @@ class StreamingManager(private val context: Context) {
     }
 
     fun sendAudio(buffer: ByteBuffer, samples: Int) {
+        val dc = audioDataChannel ?: return
         buffer.rewind()
         val len = samples * 2
         val copy = ByteBuffer.allocateDirect(len)
         buffer.limit(len)
         copy.put(buffer)
-        copy.rewind()
-        val dc = audioDataChannel
-        Log.d("Audio", "sendAudio: len=$len, dc=$dc, dc.state=${dc?.state()}, dc.bufferedAmount=${dc?.bufferedAmount()}")
-        if (dc != null) {
-            val result = dc.send(DataChannel.Buffer(copy, true))
-            Log.d("Audio", "sendAudio: dc.send=$result")
-            if (!result) {
-                Log.w("StreamingManager", "audio DataChannel send returned false")
-            }
-        } else {
-            Log.w("Audio", "sendAudio: audioDataChannel is null!")
+        copy.flip()
+        if (!dc.send(DataChannel.Buffer(copy, true))) {
+            Log.w("StreamingManager", "audio DataChannel send returned false")
         }
     }
 
@@ -133,6 +118,7 @@ class StreamingManager(private val context: Context) {
 
     fun dispose() {
         audioDataChannel?.close()
+        audioDataChannel = null
         peerConnection?.dispose()
         videoSource?.dispose()
         audioSource?.dispose()

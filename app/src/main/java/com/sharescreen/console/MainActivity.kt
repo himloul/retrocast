@@ -102,7 +102,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     override fun onAudioReady(buffer: ByteBuffer, samples: Int) {
-        android.util.Log.d("Audio", "onAudioReady: samples=$samples, streamingManager=${streamingManager}")
         streamingManager?.sendAudio(buffer, samples)
     }
 
@@ -375,7 +374,11 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     onClientConnected = {
                         sm.createOffer { offer ->
                             offer?.let {
-                                val json = JSONObject().apply { put("type", "offer"); put("sdp", it.description) }
+                                val json = JSONObject().apply {
+                                    put("type", "offer")
+                                    put("sdp", it.description)
+                                    put("sampleRate", nativeRetro.getSampleRate())
+                                }
                                 lifecycleScope.launch { signalingServer?.sendMessage(json.toString()) }
                             }
                         }

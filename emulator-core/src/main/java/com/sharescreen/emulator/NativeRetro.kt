@@ -17,6 +17,7 @@ class NativeRetro {
         fun onAudioReady(buffer: ByteBuffer, samples: Int)
     }
 
+    external fun getSampleRate(): Int
     external fun getCoreVersion(): String
 
     external fun init(corePath: String)

@@ -71,10 +71,49 @@ struct ZenithEngine {
     jobject audio_cb_obj = nullptr;
     jmethodID on_audio_mid = nullptr;
     jobject audio_buf = nullptr;
+    double av_fps = 60.0;
+    double av_sample_rate = 44100.0;
 };
 static ZenithEngine g_engine;
 
 static void libretro_log(enum retro_log_level, const char *fmt, ...) { va_list a; va_start(a,fmt); __android_log_vprint(ANDROID_LOG_INFO,"Libretro",fmt,a); va_end(a); }
+
+class OboeAudioCallback : public oboe::AudioStreamCallback {
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* d, int32_t f) override {
+        int16_t *o = (int16_t*)d;
+        size_t r = g_engine.audio_rb.read(o, f*2);
+        if (r < (size_t)f*2) memset(o+r, 0, (f*2-r)*2);
+        if (g_engine.local_audio_muted.load()) {
+            memset(o, 0, f * 2 * sizeof(int16_t));
+        }
+        g_engine.audio_cv.notify_one();
+        return oboe::DataCallbackResult::Continue;
+    }
+};
+static OboeAudioCallback g_oboe_callback;
+
+static bool setupOboeStream(int32_t sampleRate) {
+    if (g_engine.audio_stream) {
+        g_engine.audio_stream->stop();
+        g_engine.audio_stream->close();
+        g_engine.audio_stream.reset();
+    }
+    oboe::AudioStreamBuilder b;
+    b.setDirection(oboe::Direction::Output)
+     ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+     ->setFormat(oboe::AudioFormat::I16)
+     ->setChannelCount(oboe::ChannelCount::Stereo)
+     ->setSampleRate(sampleRate)
+     ->setCallback(&g_oboe_callback);
+    oboe::Result result = b.openStream(g_engine.audio_stream);
+    if (result != oboe::Result::OK) {
+        LOGE("setupOboeStream: failed at %d Hz", sampleRate);
+        return false;
+    }
+    g_engine.audio_stream->requestStart();
+    LOGI("setupOboeStream: opened at %d Hz", sampleRate);
+    return true;
+}
 
 void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
     if (!data || !g_engine.argb_ptr) return;
@@ -137,26 +176,22 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
 }
 
 size_t audio_batch_cb(const int16_t *d, size_t f) {
-    LOGI("audio_batch_cb: frames=%zu, muted=%d, cb_obj=%p, audio_buf=%p", f, g_engine.local_audio_muted.load(), (void*)g_engine.audio_cb_obj, (void*)g_engine.audio_buf);
-    if (!g_engine.local_audio_muted.load()) {
-        g_engine.audio_rb.write(d, f * 2);
+    size_t needed = f * 2;
+    while (g_engine.audio_rb.available_to_write() < needed && g_engine.emu_running) {
+        std::this_thread::yield();
     }
+    if (!g_engine.emu_running) return 0;
+    g_engine.audio_rb.write(d, needed);
     if (g_engine.audio_cb_obj && g_engine.audio_buf) {
         JNIEnv* env;
         g_engine.jvm->AttachCurrentThread(&env, nullptr);
-        size_t num_samples = f * 2;
+        size_t ns = f * 2;
         jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
-        LOGI("audio_batch_cb: num_samples=%zu, cap=%d, bytes_needed=%zu", num_samples, cap, num_samples * 2);
-        if ((jsize)(num_samples * 2) <= cap) {
+        if ((jsize)(ns * 2) <= cap) {
             void* buf_ptr = env->GetDirectBufferAddress(g_engine.audio_buf);
-            memcpy(buf_ptr, d, num_samples * 2);
-            env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)num_samples);
-            LOGI("audio_batch_cb: JNI callback done");
-        } else {
-            LOGE("audio_batch_cb: buffer too small! need=%zu, cap=%d", num_samples * 2, cap);
+            memcpy(buf_ptr, d, ns * 2);
+            env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)ns);
         }
-    } else {
-        LOGI("audio_batch_cb: skipping JNI callback (cb_obj=%p, audio_buf=%p)", (void*)g_engine.audio_cb_obj, (void*)g_engine.audio_buf);
     }
     return f;
 }
@@ -186,20 +221,7 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_init(JNIEnv* en
     g_engine.get_mem_data = (decltype(g_engine.get_mem_data))dlsym(g_engine.core_handle, "retro_get_memory_data");
     g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
     ((retro_init_t)dlsym(g_engine.core_handle, "retro_init"))();
-
-    if (g_engine.audio_stream) {
-        g_engine.audio_stream->stop();
-        g_engine.audio_stream->close();
-        g_engine.audio_stream.reset();
-    }
-    static class AC : public oboe::AudioStreamCallback {
-        oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* d, int32_t f) override {
-            int16_t *o = (int16_t*)d; size_t r = g_engine.audio_rb.read(o, f*2);
-            if (r < (size_t)f*2) memset(o+r, 0, (f*2-r)*2); g_engine.audio_cv.notify_one(); return oboe::DataCallbackResult::Continue;
-        }
-    } ac;
-    oboe::AudioStreamBuilder b; b.setDirection(oboe::Direction::Output)->setPerformanceMode(oboe::PerformanceMode::LowLatency)->setFormat(oboe::AudioFormat::I16)->setChannelCount(oboe::ChannelCount::Stereo)->setSampleRate(44100)->setCallback(&ac);
-    b.openStream(g_engine.audio_stream); g_engine.audio_stream->requestStart();
+    LOGI("init: done (Oboe deferred to loadGame)");
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
@@ -215,13 +237,42 @@ JNIEXPORT jboolean JNICALL Java_com_sharescreen_emulator_NativeRetro_loadGame(JN
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;
     struct retro_game_info info = { p, nullptr, 0, nullptr }; bool ok = ((bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game"))(&info);
     LOGI("loadGame: retro_load_game returned %d", ok);
-    if (ok) { std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav"; std::ifstream f(sp, std::ios::binary); if (f.is_open()) { void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); if (d) f.read((char*)d, g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM)); f.close(); } }
+    if (ok) {
+        auto get_av = (void (*)(struct retro_system_av_info*))dlsym(g_engine.core_handle, "retro_get_system_av_info");
+        if (get_av) {
+            struct retro_system_av_info av;
+            get_av(&av);
+            g_engine.av_fps = av.timing.fps;
+            g_engine.av_sample_rate = av.timing.sample_rate;
+            LOGI("loadGame: fps=%.4f, sample_rate=%.0f", g_engine.av_fps, g_engine.av_sample_rate);
+        }
+        setupOboeStream((int32_t)g_engine.av_sample_rate);
+        std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+        std::ifstream f(sp, std::ios::binary);
+        if (f.is_open()) { void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); if (d) f.read((char*)d, g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM)); f.close(); }
+    }
     env->ReleaseStringUTFChars(path, p); g_engine.core_run = (retro_run_t)dlsym(g_engine.core_handle, "retro_run"); LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, jobject) {
     g_engine.emu_running = true;
-    g_engine.emu_thread = std::thread([]{ constexpr auto frame_dur = std::chrono::nanoseconds(16666667); while(g_engine.emu_running){ auto start = std::chrono::steady_clock::now(); { std::lock_guard<std::recursive_mutex> l(g_engine.core_mutex); if(g_engine.core_run) g_engine.core_run(); } auto elapsed = std::chrono::steady_clock::now() - start; if(elapsed < frame_dur) std::this_thread::sleep_for(frame_dur - elapsed); } });
+    g_engine.emu_thread = std::thread([]{
+        auto frame_duration = std::chrono::duration<double, std::nano>(1.0 / g_engine.av_fps * 1e9);
+        auto start_time = std::chrono::steady_clock::now();
+        uint64_t frame_count = 0;
+        while (g_engine.emu_running) {
+            {
+                std::lock_guard<std::recursive_mutex> l(g_engine.core_mutex);
+                if (g_engine.core_run) g_engine.core_run();
+            }
+            frame_count++;
+            auto expected_end = start_time + frame_duration * frame_count;
+            auto now = std::chrono::steady_clock::now();
+            if (now < expected_end) {
+                std::this_thread::sleep_for(expected_end - now);
+            }
+        }
+    });
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
@@ -280,5 +331,6 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setAudioCallbac
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) { LOGI("setInputState: %d", s); g_engine.input_state = (uint16_t)s; }
 
+JNIEXPORT jint JNICALL Java_com_sharescreen_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) { return (jint)g_engine.av_sample_rate; }
 JNIEXPORT jstring JNICALL Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject) { return env->NewStringUTF("Zenith Engine v5.0"); }
 }

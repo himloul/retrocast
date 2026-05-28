@@ -58,10 +58,11 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                         const status = document.getElementById('status');
                                         const video = document.getElementById('remoteVideo');
                                         let ws;
-                                        let audioCtx = null;
-                                        let audioScheduledTime = 0;
+                                         let audioCtx = null;
+                                         let audioScheduledTime = 0;
+                                         let targetSampleRate = 44100;
 
-                                        function connect() {
+                                         function connect() {
                                             ws = new WebSocket('ws://' + location.host + '/ws');
                                             
                                             const pc = new RTCPeerConnection({
@@ -87,9 +88,9 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                                                 pcm = new Int16Array(raw);
                                                             }
                                                             if (pcm.length < 2) return;
-                                                            const frames = pcm.length / 2;
-                                                            const buffer = audioCtx.createBuffer(2, frames, 44100);
-                                                            const left = buffer.getChannelData(0);
+                                                             const frames = pcm.length / 2;
+                                                             const buffer = audioCtx.createBuffer(2, frames, targetSampleRate);
+                                                             const left = buffer.getChannelData(0);
                                                             const right = buffer.getChannelData(1);
                                                             for (let i = 0; i < frames; i++) {
                                                                 left[i] = pcm[i * 2] / 32768;
@@ -102,7 +103,7 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                                             const now = audioCtx.currentTime;
                                                             if (audioScheduledTime < now) {
                                                                 audioScheduledTime = now + 0.05;
-                                                            } else if (audioScheduledTime - now > 0.5) {
+                                                            } else if (audioScheduledTime - now > 0.2) {
                                                                 audioScheduledTime = now + 0.05;
                                                             }
                                                             src.start(audioScheduledTime);
@@ -127,10 +128,11 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                                 if (pc.connectionState === 'connected') status.innerText = 'Connected';
                                             };
 
-                                            ws.onmessage = async (event) => {
-                                                const msg = JSON.parse(event.data);
-                                                if (msg.type === 'offer') {
-                                                    await pc.setRemoteDescription(new RTCSessionDescription(msg));
+                                             ws.onmessage = async (event) => {
+                                                 const msg = JSON.parse(event.data);
+                                                 if (msg.type === 'offer') {
+                                                     if (msg.sampleRate) targetSampleRate = msg.sampleRate;
+                                                     await pc.setRemoteDescription(new RTCSessionDescription(msg));
                                                     const answer = await pc.createAnswer();
                                                     await pc.setLocalDescription(answer);
                                                     ws.send(JSON.stringify(pc.localDescription));
@@ -150,10 +152,10 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                             video.play().catch(e => console.log('Play error:', e));
                                             status.innerText = 'Connecting...';
                                             if (!ws) connect();
-                                            if (!audioCtx) {
-                                                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-                                                audioScheduledTime = audioCtx.currentTime + 0.05;
-                                            }
+                                             if (!audioCtx) {
+                                                 audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: targetSampleRate });
+                                                 audioScheduledTime = audioCtx.currentTime + 0.05;
+                                             }
                                             if (audioCtx.state === 'suspended') audioCtx.resume();
                                         };
                                     """.trimIndent()
