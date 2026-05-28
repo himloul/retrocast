@@ -13,6 +13,10 @@ class NativeRetro {
         fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int)
     }
 
+    interface AudioCallback {
+        fun onAudioReady(buffer: ByteBuffer, samples: Int)
+    }
+
     external fun getCoreVersion(): String
 
     external fun init(corePath: String)
@@ -37,6 +41,8 @@ class NativeRetro {
     }
 
     external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?, i420: ByteBuffer?)
+
+    external fun setAudioCallback(callback: AudioCallback?, buffer: ByteBuffer?)
 
     external fun setPaths(systemPath: String, savePath: String)
 

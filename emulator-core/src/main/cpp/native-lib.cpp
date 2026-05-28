@@ -67,6 +67,9 @@ struct ZenithEngine {
     uint8_t* argb_ptr = nullptr;
     uint8_t* i420_ptr = nullptr;
     std::shared_ptr<oboe::AudioStream> audio_stream;
+    jobject audio_cb_obj = nullptr;
+    jmethodID on_audio_mid = nullptr;
+    jobject audio_buf = nullptr;
 };
 static ZenithEngine g_engine;
 
@@ -132,7 +135,21 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         g_engine.i420_buf, (jint)w, (jint)(w / 2));
 }
 
-size_t audio_batch_cb(const int16_t *d, size_t f) { g_engine.audio_rb.write(d, f * 2); return f; }
+size_t audio_batch_cb(const int16_t *d, size_t f) {
+    g_engine.audio_rb.write(d, f * 2);
+    if (g_engine.audio_cb_obj && g_engine.audio_buf) {
+        JNIEnv* env;
+        g_engine.jvm->AttachCurrentThread(&env, nullptr);
+        size_t num_samples = f * 2;
+        jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
+        if ((jsize)(num_samples * 2) <= cap) {
+            void* buf_ptr = env->GetDirectBufferAddress(g_engine.audio_buf);
+            memcpy(buf_ptr, d, num_samples * 2);
+            env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)num_samples);
+        }
+    }
+    return f;
+}
 int16_t input_state_cb(unsigned p, unsigned d, unsigned i, unsigned id) { return (p==0 && d==RETRO_DEVICE_JOYPAD) ? ((g_engine.input_state.load() & (1<<id))?1:0) : (int16_t)0; }
 bool env_cb(unsigned cmd, void *data) {
     switch (cmd) {
@@ -212,6 +229,21 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNI
         g_engine.argb_ptr = nullptr;
         g_engine.i420_buf = nullptr;
         g_engine.i420_ptr = nullptr;
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setAudioCallback(JNIEnv* env, jobject, jobject cb, jobject buf) {
+    if (g_engine.audio_cb_obj) env->DeleteGlobalRef(g_engine.audio_cb_obj);
+    if (g_engine.audio_buf) env->DeleteGlobalRef(g_engine.audio_buf);
+    if (cb) {
+        g_engine.audio_cb_obj = env->NewGlobalRef(cb);
+        g_engine.audio_buf = env->NewGlobalRef(buf);
+        env->GetJavaVM(&g_engine.jvm);
+        g_engine.on_audio_mid = env->GetMethodID(env->GetObjectClass(cb), "onAudioReady", "(Ljava/nio/ByteBuffer;I)V");
+    } else {
+        g_engine.audio_cb_obj = nullptr;
+        g_engine.audio_buf = nullptr;
+        g_engine.on_audio_mid = nullptr;
     }
 }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import org.webrtc.*
 import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
+import java.nio.ByteBuffer
 
 class StreamingManager(private val context: Context) {
     private val rootEglBase: EglBase = EglBase.create()
@@ -12,6 +13,7 @@ class StreamingManager(private val context: Context) {
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
+    private var audioDataChannel: DataChannel? = null
 
     init {
         val options = PeerConnectionFactory.InitializationOptions.builder(context)
@@ -56,6 +58,8 @@ class StreamingManager(private val context: Context) {
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
         peerConnection?.addTrack(audioTrack, listOf("STREAM"))
+
+        audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
     }
 
     private fun mangleSdp(sdp: String): String {
@@ -97,11 +101,22 @@ class StreamingManager(private val context: Context) {
         }, mangledSdp)
     }
 
+    fun sendAudio(buffer: ByteBuffer, samples: Int) {
+        buffer.rewind()
+        val len = samples * 2
+        val copy = ByteBuffer.allocateDirect(len)
+        buffer.limit(len)
+        copy.put(buffer)
+        copy.rewind()
+        audioDataChannel?.send(DataChannel.Buffer(copy, true))
+    }
+
     fun addIceCandidate(candidate: IceCandidate) {
         peerConnection?.addIceCandidate(candidate)
     }
 
     fun dispose() {
+        audioDataChannel?.close()
         peerConnection?.dispose()
         videoSource?.dispose()
         audioSource?.dispose()

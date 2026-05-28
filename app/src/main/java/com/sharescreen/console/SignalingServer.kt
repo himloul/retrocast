@@ -66,6 +66,39 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                                             });
 
+                                            let audioCtx = null;
+                                            let audioScheduledTime = 0;
+
+                                            pc.ondatachannel = (event) => {
+                                                const dc = event.channel;
+                                                if (dc.label === 'audio') {
+                                                    dc.binaryType = 'arraybuffer';
+                                                    dc.onmessage = (e) => {
+                                                        if (!audioCtx) {
+                                                            audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+                                                            audioScheduledTime = audioCtx.currentTime + 0.05;
+                                                        }
+                                                        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+                                                        const pcm = new Int16Array(e.data);
+                                                        const frames = pcm.length / 2;
+                                                        const buffer = audioCtx.createBuffer(2, frames, 44100);
+                                                        const left = buffer.getChannelData(0);
+                                                        const right = buffer.getChannelData(1);
+                                                        for (let i = 0; i < frames; i++) {
+                                                            left[i] = pcm[i * 2] / 32768;
+                                                            right[i] = pcm[i * 2 + 1] / 32768;
+                                                        }
+                                                        const src = audioCtx.createBufferSource();
+                                                        src.buffer = buffer;
+                                                        src.connect(audioCtx.destination);
+                                                        if (audioScheduledTime < audioCtx.currentTime) audioScheduledTime = audioCtx.currentTime + 0.01;
+                                                        src.start(audioScheduledTime);
+                                                        audioScheduledTime += buffer.duration;
+                                                    };
+                                                }
+                                            };
+
                                             pc.ontrack = (event) => {
                                                 console.log('Track received:', event.track.kind);
                                                 status.innerText = 'Streaming Active';

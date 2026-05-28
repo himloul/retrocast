@@ -44,7 +44,7 @@ import android.os.Handler
 import android.os.Looper
 import java.nio.ByteBuffer
 
-class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
+class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
     private lateinit var hapticManager: HapticFeedbackManager
     private lateinit var nativeRetro: NativeRetro
     private var streamingManager: StreamingManager? = null
@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
 
     private var pixelBuffer: ByteBuffer? = null
     private var i420Buffer: ByteBuffer? = null
+    private var audioBuffer: ByteBuffer? = null
 
     private val saveHandler = Handler(Looper.getMainLooper())
     private val saveRunnable = object : Runnable {
@@ -96,6 +97,10 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
             nativePresentation = null
             isNativeDisplayConnected = false
         }
+    }
+
+    override fun onAudioReady(buffer: ByteBuffer, samples: Int) {
+        streamingManager?.sendAudio(buffer, samples)
     }
 
     override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int) {
@@ -287,6 +292,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback {
                     if (pixelBuffer != null && i420Buffer != null) {
                         nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
                     }
+                    audioBuffer = ByteBuffer.allocateDirect(16384)
+                    audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
                     if (nativeRetro.loadGame(romFile.absolutePath)) {
                         loadedRomPath = romFile.absolutePath
                         isCoreReady = true
