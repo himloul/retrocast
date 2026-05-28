@@ -27,6 +27,8 @@ class NativeRetro {
 
     external fun stop()
 
+    external fun unloadGame()
+
     external fun setInputState(state: Int)
 
     private var currentInputMask = 0

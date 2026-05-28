@@ -177,6 +177,11 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_init(JNIEnv* en
     g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
     ((retro_init_t)dlsym(g_engine.core_handle, "retro_init"))();
 
+    if (g_engine.audio_stream) {
+        g_engine.audio_stream->stop();
+        g_engine.audio_stream->close();
+        g_engine.audio_stream.reset();
+    }
     static class AC : public oboe::AudioStreamCallback {
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* d, int32_t f) override {
             int16_t *o = (int16_t*)d; size_t r = g_engine.audio_rb.read(o, f*2);
@@ -210,6 +215,18 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, 
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_unloadGame(JNIEnv*, jobject) {
+    LOGI("=== unloadGame() called ===");
+    if (g_engine.core_handle) {
+        auto retro_unload_game = (void (*)())dlsym(g_engine.core_handle, "retro_unload_game");
+        if (retro_unload_game) retro_unload_game();
+    }
+    g_engine.core_run = nullptr;
+    g_engine.rom_path = "";
+    g_engine.audio_rb.head = 0;
+    g_engine.audio_rb.tail = 0;
+}
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
     if(g_engine.callback_obj) env->DeleteGlobalRef(g_engine.callback_obj);

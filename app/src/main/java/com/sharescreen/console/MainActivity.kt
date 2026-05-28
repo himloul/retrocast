@@ -60,6 +60,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var nativePresentation: GamePresentation? = null
     private var emulatorView: EmulatorView? = null
     private var isNativeDisplayConnected by mutableStateOf(false)
+    private var isCoreInitialized = false
     private var isCoreReady = false
 
     private var pixelBuffer: ByteBuffer? = null
@@ -283,17 +284,27 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     if (!success) return@launch
                 }
                 if (coreFile.exists()) {
-                    // SETUP PATHS
+                    if (isCoreReady) {
+                        nativeRetro.stop()
+                        nativeRetro.saveSram()
+                        nativeRetro.unloadGame()
+                        isCoreReady = false
+                        loadedRomPath = null
+                    }
+
                     val systemDir = File(filesDir, "system").apply { mkdirs() }
                     val saveDir = File(filesDir, "saves").apply { mkdirs() }
                     nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
 
-                    nativeRetro.init(coreFile.absolutePath)
-                    if (pixelBuffer != null && i420Buffer != null) {
-                        nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+                    if (!isCoreInitialized) {
+                        nativeRetro.init(coreFile.absolutePath)
+                        if (pixelBuffer != null && i420Buffer != null) {
+                            nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+                        }
+                        audioBuffer = ByteBuffer.allocateDirect(16384)
+                        audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
+                        isCoreInitialized = true
                     }
-                    audioBuffer = ByteBuffer.allocateDirect(16384)
-                    audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
                     if (nativeRetro.loadGame(romFile.absolutePath)) {
                         loadedRomPath = romFile.absolutePath
                         isCoreReady = true
@@ -394,7 +405,9 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         saveHandler.removeCallbacks(saveRunnable)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.unregisterDisplayListener(displayListener); nativePresentation?.dismiss()
-        nativeRetro.stop(); signalingServer?.stop(); streamingManager?.dispose()
+        if (isCoreReady) nativeRetro.stop()
+        if (isCoreInitialized) nativeRetro.unloadGame()
+        signalingServer?.stop(); streamingManager?.dispose()
     }
 
 }
