@@ -29,6 +29,8 @@ class NativeRetro {
 
     external fun unloadGame()
 
+    external fun setLocalAudioMuted(muted: Boolean)
+
     external fun setInputState(state: Int)
 
     private var currentInputMask = 0

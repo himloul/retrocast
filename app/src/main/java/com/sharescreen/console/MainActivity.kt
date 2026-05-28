@@ -47,6 +47,7 @@ import java.nio.ByteBuffer
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
     private lateinit var hapticManager: HapticFeedbackManager
     private lateinit var nativeRetro: NativeRetro
+    @Volatile
     private var streamingManager: StreamingManager? = null
     private var videoCapturer = LibretroVideoCapturer()
     
@@ -341,6 +342,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
     private fun toggleCasting() {
         if (isCasting) {
+            nativeRetro.setLocalAudioMuted(false)
             signalingServer?.stop(); signalingServer = null; streamingManager?.dispose(); streamingManager = null; isCasting = false; castUrl = ""
         } else {
             val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
@@ -390,6 +392,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 )
             }
             isCasting = true
+            nativeRetro.setLocalAudioMuted(true)
         }
     }
 

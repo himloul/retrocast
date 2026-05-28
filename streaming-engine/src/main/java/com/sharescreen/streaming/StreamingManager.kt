@@ -1,6 +1,7 @@
 package com.sharescreen.streaming
 
 import android.content.Context
+import android.util.Log
 import org.webrtc.*
 import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
@@ -13,6 +14,7 @@ class StreamingManager(private val context: Context) {
     private var videoSource: VideoSource? = null
     private var audioSource: AudioSource? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
+    @Volatile
     private var audioDataChannel: DataChannel? = null
 
     init {
@@ -50,14 +52,10 @@ class StreamingManager(private val context: Context) {
         videoSource = peerConnectionFactory?.createVideoSource(capturer.isScreencast)
         capturer.initialize(null, context, videoSource?.capturerObserver)
         val videoTrack = peerConnectionFactory?.createVideoTrack("VIDEO_TRACK", videoSource)
-        
-        audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
-        val audioTrack = peerConnectionFactory?.createAudioTrack("AUDIO_TRACK", audioSource)
 
         videoTrack?.setEnabled(true)
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
-        peerConnection?.addTrack(audioTrack, listOf("STREAM"))
 
         audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
     }
@@ -108,7 +106,12 @@ class StreamingManager(private val context: Context) {
         buffer.limit(len)
         copy.put(buffer)
         copy.rewind()
-        audioDataChannel?.send(DataChannel.Buffer(copy, true))
+        val dc = audioDataChannel
+        if (dc != null) {
+            if (!dc.send(DataChannel.Buffer(copy, true))) {
+                Log.w("StreamingManager", "audio DataChannel send returned false")
+            }
+        }
     }
 
     fun addIceCandidate(candidate: IceCandidate) {

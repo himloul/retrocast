@@ -53,6 +53,7 @@ struct ZenithEngine {
     retro_run_t core_run = nullptr;
     std::atomic<retro_pixel_format> pixel_fmt{RETRO_PIXEL_FORMAT_0RGB1555};
     std::atomic<uint16_t> input_state{0};
+    std::atomic<bool> local_audio_muted{false};
     std::recursive_mutex core_mutex;
     std::string system_dir = ".", save_dir = ".", rom_path = "";
     typedef void *(*get_mem_data_t)(unsigned id);
@@ -136,7 +137,9 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
 }
 
 size_t audio_batch_cb(const int16_t *d, size_t f) {
-    g_engine.audio_rb.write(d, f * 2);
+    if (!g_engine.local_audio_muted.load()) {
+        g_engine.audio_rb.write(d, f * 2);
+    }
     if (g_engine.audio_cb_obj && g_engine.audio_buf) {
         JNIEnv* env;
         g_engine.jvm->AttachCurrentThread(&env, nullptr);
@@ -226,6 +229,10 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_unloadGame(JNIE
     g_engine.rom_path = "";
     g_engine.audio_rb.head = 0;
     g_engine.audio_rb.tail = 0;
+}
+
+JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setLocalAudioMuted(JNIEnv*, jobject, jboolean muted) {
+    g_engine.local_audio_muted.store(muted);
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
