@@ -40,7 +40,6 @@ import org.json.JSONObject
 import org.webrtc.*
 import java.io.File
 import android.os.Handler
-import android.util.Log
 
 import android.os.Looper
 import java.nio.ByteBuffer
@@ -424,13 +423,12 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     private fun toggleCasting() {
-        try {
         if (isCasting) {
             nativeRetro.setLocalAudioMuted(false)
             signalingServer?.stop(); signalingServer = null; streamingManager?.dispose(); streamingManager = null; isCasting = false; castUrl = ""
         } else {
             val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
-            if (ip == null) { Log.e("MainActivity", "getLocalIpAddress returned null"); return }
+            if (ip == null) { Toast.makeText(this, "Connect to WiFi to cast", Toast.LENGTH_SHORT).show(); return }
             castUrl = "http://$ip:$port"
             val sm = StreamingManager(this).also { streamingManager = it }
 
@@ -482,9 +480,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             isCasting = true
             nativeRetro.setLocalAudioMuted(true)
         }
-    } catch (e: Exception) {
-        Log.e("MainActivity", "toggleCasting failed", e)
-    }
     }
 
     override fun onPause() {
