@@ -31,21 +31,26 @@ fun TouchpadController(
     isLandscape: Boolean
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        
+        val isNarrow = maxWidth < 360.dp
+        val dpadSize = if (isLandscape) 140.dp else if (isNarrow) 120.dp else 150.dp
+        val sidePad = if (isLandscape) 32.dp else if (isNarrow) 4.dp else 8.dp
+        val bottomPad = if (isLandscape) 0.dp else if (isNarrow) 16.dp else 24.dp
+        val clusterSpacing = if (isNarrow) 8.dp else 16.dp
+
         // --- LEFT CLUSTER (L + DPAD) ---
         Column(
             modifier = Modifier
                 .align(if (isLandscape) Alignment.CenterStart else Alignment.BottomStart)
-                .padding(start = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
+                .padding(start = sidePad, bottom = bottomPad),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(clusterSpacing)
         ) {
             CircleControlButton(label = "L") { pressed ->
                 nativeRetro.setButton(10, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
 
-            GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
+            GamepadBase(modifier = Modifier.size(dpadSize)) {
                 DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 8.dp), 4) { nativeRetro.setButton(4, it > 0); if(it > 0) hapticManager.triggerTick() }
                 DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-8).dp), 5) { nativeRetro.setButton(5, it > 0); if(it > 0) hapticManager.triggerTick() }
                 DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 8.dp), 6) { nativeRetro.setButton(6, it > 0); if(it > 0) hapticManager.triggerTick() }
@@ -57,16 +62,16 @@ fun TouchpadController(
         Column(
             modifier = Modifier
                 .align(if (isLandscape) Alignment.CenterEnd else Alignment.BottomEnd)
-                .padding(end = if (isLandscape) 64.dp else 16.dp, bottom = if (isLandscape) 0.dp else 48.dp),
+                .padding(end = sidePad, bottom = bottomPad),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(clusterSpacing)
         ) {
             CircleControlButton(label = "R") { pressed ->
                 nativeRetro.setButton(11, pressed)
                 if (pressed) hapticManager.triggerTick()
             }
 
-            GamepadBase(modifier = Modifier.size(if (isLandscape) 140.dp else 150.dp)) {
+            GamepadBase(modifier = Modifier.size(dpadSize)) {
                 ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), Color(0xFFEF9A9A)) { 
                     nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
                 }
@@ -80,8 +85,8 @@ fun TouchpadController(
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = if (isLandscape) 24.dp else 32.dp),
-            horizontalArrangement = Arrangement.spacedBy(24.dp)
+                .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 8.dp else 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (isNarrow) 16.dp else 24.dp)
         ) {
             IconPillButton(Icons.Default.HorizontalRule) { pressed ->
                 nativeRetro.setButton(2, pressed)

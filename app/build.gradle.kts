@@ -79,4 +79,7 @@ dependencies {
     
     // WebRTC for streaming
     implementation("com.github.webrtc-sdk:android:104.5112.01")
+
+    // QR code generation
+    implementation("com.google.zxing:core:3.5.3")
 }

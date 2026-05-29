@@ -40,9 +40,18 @@ import org.json.JSONObject
 import org.webrtc.*
 import java.io.File
 import android.os.Handler
+import android.util.Log
 
 import android.os.Looper
 import java.nio.ByteBuffer
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.style.TextOverflow
 
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
     private lateinit var hapticManager: HapticFeedbackManager
@@ -57,6 +66,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var castUrl by mutableStateOf("")
     private var loadedRomPath by mutableStateOf<String?>(null)
     private var isDownloading by mutableStateOf(false)
+    private var romFiles by mutableStateOf<List<File>>(emptyList())
 
     private var nativePresentation: GamePresentation? = null
     private var emulatorView: EmulatorView? = null
@@ -141,6 +151,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         dm.registerDisplayListener(displayListener, null)
         checkExternalDisplay()
         saveHandler.post(saveRunnable)
+        refreshRomLibrary()
         setContent {
             val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
             val configuration = LocalConfiguration.current
@@ -157,7 +168,10 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                             hapticManager = hapticManager,
                             isCasting = isCasting,
                             onCastClick = { showCastSheet = true },
-                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }
+                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
+                            romFiles = romFiles,
+                            onRomSelected = { file -> loadLocalRom(file) },
+                            loadedRomPath = loadedRomPath
                         )
                     } else {
                         PortraitHandheldLayout(
@@ -166,7 +180,10 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                             isCasting = isCasting,
                             isNativeDisplayConnected = isNativeDisplayConnected,
                             onCastClick = { showCastSheet = true },
-                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }
+                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
+                            romFiles = romFiles,
+                            onRomSelected = { file -> loadLocalRom(file) },
+                            loadedRomPath = loadedRomPath
                         )
                     }
 
@@ -198,11 +215,14 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         isCasting: Boolean,
         isNativeDisplayConnected: Boolean,
         onCastClick: () -> Unit,
-        onLoadRom: () -> Unit
+        onLoadRom: () -> Unit,
+        romFiles: List<File>,
+        onRomSelected: (File) -> Unit,
+        loadedRomPath: String?
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.fillMaxWidth().weight(0.1f).padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).height(48.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -212,15 +232,19 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.LightGray)
                 }
             }
-            Box(modifier = Modifier.weight(0.4f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (!isCasting && !isNativeDisplayConnected) {
-                    AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
-                } else {
-                    Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+            if (loadedRomPath != null) {
+                Box(modifier = Modifier.weight(0.45f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    if (!isCasting && !isNativeDisplayConnected) {
+                        AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                    } else {
+                        Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                    }
                 }
-            }
-            Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
-                TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+                Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
+                    TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+                }
+            } else {
+                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }
     }
@@ -231,19 +255,26 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         hapticManager: HapticFeedbackManager,
         isCasting: Boolean,
         onCastClick: () -> Unit,
-        onLoadRom: () -> Unit
+        onLoadRom: () -> Unit,
+        romFiles: List<File>,
+        onRomSelected: (File) -> Unit,
+        loadedRomPath: String?
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (!isCasting && !isNativeDisplayConnected) {
-                    AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
-                } else {
-                    Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+            if (loadedRomPath != null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    if (!isCasting && !isNativeDisplayConnected) {
+                        AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                    } else {
+                        Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                    }
                 }
+                TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = true)
+            } else {
+                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, modifier = Modifier.fillMaxSize())
             }
-            TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = true)
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter),
+                modifier = Modifier.fillMaxWidth().padding(8.dp).align(Alignment.TopCenter),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 IconButton(onClick = onLoadRom, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
@@ -310,11 +341,63 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                         loadedRomPath = romFile.absolutePath
                         isCoreReady = true
                         nativeRetro.start()
+                        refreshRomLibrary()
                     }
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Failed to load ROM", e)
                 isDownloading = false
+            }
+        }
+    }
+
+    private fun refreshRomLibrary() {
+        romFiles = filesDir.listFiles { f -> f.extension.equals("gba", ignoreCase = true) }?.sortedBy { it.name }?.toList() ?: emptyList()
+    }
+
+    private fun loadLocalRom(romFile: File) {
+        lifecycleScope.launch {
+            try {
+                val extension = romFile.name.substringAfterLast('.', "").lowercase()
+                val coreName = when (extension) { "gba" -> "mgba_libretro_android.so"; else -> null }
+                if (coreName == null) return@launch
+                val coreFile = File(filesDir, coreName)
+                if (!coreFile.exists()) {
+                    isDownloading = true
+                    val success = CoreDownloader.downloadCore(coreName, filesDir)
+                    isDownloading = false
+                    if (!success) return@launch
+                }
+                if (coreFile.exists()) {
+                    if (isCoreReady) {
+                        nativeRetro.stop()
+                        nativeRetro.saveSram()
+                        nativeRetro.unloadGame()
+                        isCoreReady = false
+                        loadedRomPath = null
+                    }
+
+                    val systemDir = File(filesDir, "system").apply { mkdirs() }
+                    val saveDir = File(filesDir, "saves").apply { mkdirs() }
+                    nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
+
+                    if (!isCoreInitialized) {
+                        nativeRetro.init(coreFile.absolutePath)
+                        if (pixelBuffer != null && i420Buffer != null) {
+                            nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+                        }
+                        audioBuffer = ByteBuffer.allocateDirect(16384)
+                        audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
+                        isCoreInitialized = true
+                    }
+                    if (nativeRetro.loadGame(romFile.absolutePath)) {
+                        loadedRomPath = romFile.absolutePath
+                        isCoreReady = true
+                        nativeRetro.start()
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to load local ROM", e)
             }
         }
     }
@@ -341,12 +424,13 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     private fun toggleCasting() {
+        try {
         if (isCasting) {
             nativeRetro.setLocalAudioMuted(false)
             signalingServer?.stop(); signalingServer = null; streamingManager?.dispose(); streamingManager = null; isCasting = false; castUrl = ""
         } else {
             val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
-            if (ip == null) return
+            if (ip == null) { Log.e("MainActivity", "getLocalIpAddress returned null"); return }
             castUrl = "http://$ip:$port"
             val sm = StreamingManager(this).also { streamingManager = it }
 
@@ -398,6 +482,9 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             isCasting = true
             nativeRetro.setLocalAudioMuted(true)
         }
+    } catch (e: Exception) {
+        Log.e("MainActivity", "toggleCasting failed", e)
+    }
     }
 
     override fun onPause() {
@@ -422,24 +509,115 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 @Composable
 fun CastSheetContent(isCasting: Boolean, castUrl: String, onToggleCast: () -> Unit) {
     val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxWidth().padding(24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Cast to Screen", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         if (!isCasting) {
-            Text("Ultra-low latency WebRTC cast.", color = Color.Gray)
-            Spacer(modifier = Modifier.height(32.dp))
-            Button(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Start Web Casting") }
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Start Web Casting") }
         } else {
-            Surface(color = Color.DarkGray, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(castUrl, style = MaterialTheme.typography.titleLarge, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-                    IconButton(onClick = {
-                        val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
-                    }) { Icon(Icons.Default.ContentCopy, "Copy") }
+            Spacer(modifier = Modifier.height(24.dp))
+            QrCodeView(url = castUrl, modifier = Modifier.size(200.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(castUrl, style = MaterialTheme.typography.titleLarge, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            IconButton(onClick = {
+                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
+            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Gray) }
+            Spacer(modifier = Modifier.height(24.dp))
+            OutlinedButton(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Stop Web Casting") }
+        }
+    }
+}
+
+@Composable
+fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: Modifier = Modifier) {
+    if (romFiles.isEmpty()) {
+        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.Gamepad, "No games", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Tap folder to load a ROM", color = Color.Gray, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    } else {
+        Column(modifier = modifier) {
+            Text("Games", color = Color.Gray, style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp))
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(romFiles) { rom ->
+                    GameCard(rom = rom, onClick = { onRomSelected(rom) })
                 }
             }
-            Spacer(modifier = Modifier.height(24.dp))
-            OutlinedButton(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) { Text("Stop Web Casting") }
+        }
+    }
+}
+
+@Composable
+fun GameCard(rom: File, onClick: () -> Unit) {
+    val name = rom.nameWithoutExtension
+    val initials = name.split(Regex("[^A-Za-z0-9]"))
+        .filter { it.isNotBlank() }
+        .take(2)
+        .joinToString("") { it.first().uppercase() }
+        .ifEmpty { "GB" }
+
+    Card(
+        onClick = onClick,
+        modifier = Modifier.width(120.dp).height(160.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Surface(
+                    modifier = Modifier.size(56.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    color = Color(0xFF2D2D44)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(initials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    name,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun QrCodeView(url: String, modifier: Modifier = Modifier) {
+    val matrix = remember(url) {
+        try {
+            QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 256, 256)
+        } catch (e: Exception) {
+            null
+        }
+    }
+    if (matrix == null) return
+    Canvas(modifier = modifier) {
+        val cellSize = minOf(size.width, size.height) / matrix.width
+        for (y in 0 until matrix.height) {
+            for (x in 0 until matrix.width) {
+                if (matrix[x, y]) {
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(x * cellSize, y * cellSize),
+                        size = Size(cellSize, cellSize)
+                    )
+                }
+            }
         }
     }
 }
