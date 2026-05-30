@@ -46,11 +46,15 @@ import java.nio.ByteBuffer
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+
+import android.graphics.Bitmap
 
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
     private lateinit var hapticManager: HapticFeedbackManager
@@ -150,6 +154,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         dm.registerDisplayListener(displayListener, null)
         checkExternalDisplay()
         saveHandler.post(saveRunnable)
+        ThumbnailManager.init(this)
         refreshRomLibrary()
         setContent {
             val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
@@ -559,14 +564,27 @@ fun GameCard(rom: File, onClick: () -> Unit) {
         .joinToString("") { it.first().uppercase() }
         .ifEmpty { "GB" }
 
+    var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
+
+    LaunchedEffect(rom) {
+        thumbnail = ThumbnailManager.load(name)
+    }
+
     Card(
         onClick = onClick,
-        modifier = Modifier.width(120.dp).height(160.dp),
+        modifier = Modifier.size(120.dp),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (thumbnail != null) {
+                Image(
+                    bitmap = thumbnail!!.asImageBitmap(),
+                    contentDescription = name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
                 Surface(
                     modifier = Modifier.size(56.dp),
                     shape = RoundedCornerShape(28.dp),
@@ -576,16 +594,6 @@ fun GameCard(rom: File, onClick: () -> Unit) {
                         Text(initials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                     }
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    name,
-                    color = Color.White,
-                    fontSize = 12.sp,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
             }
         }
     }

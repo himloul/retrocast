@@ -1,0 +1,60 @@
+package com.sharescreen.console
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+object ThumbnailManager {
+    private const val BOXART_BASE = "https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts"
+    private const val TAG = "ThumbnailManager"
+
+    private var cacheDir: File? = null
+
+    fun init(context: Context) {
+        cacheDir = File(context.filesDir, "thumbnails").apply { mkdirs() }
+    }
+
+    suspend fun load(romName: String): Bitmap? {
+        val dir = cacheDir ?: return null
+
+        val cacheFile = File(dir, "$romName.png")
+        if (cacheFile.exists()) {
+            return BitmapFactory.decodeFile(cacheFile.absolutePath)
+        }
+
+        val attempts = listOf(
+            romName,
+            romName.replace(Regex("\\(.*?\\)"), "").replace(Regex("\\[.*?\\]"), "").trim()
+        ).distinct()
+
+        return withContext(Dispatchers.IO) {
+            for (name in attempts) {
+                val encoded = URLEncoder.encode(name, "UTF-8").replace("+", "%20")
+                val url = "$BOXART_BASE/$encoded.png"
+                try {
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.connectTimeout = 4000
+                    conn.readTimeout = 4000
+                    conn.connect()
+                    if (conn.responseCode == 200) {
+                        val bytes = conn.inputStream.use { it.readBytes() }
+                        cacheFile.outputStream().use { it.write(bytes) }
+                        Log.i(TAG, "Cached thumbnail for $romName")
+                        return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }
+                    conn.disconnect()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to load $url: ${e.message}")
+                }
+            }
+            null
+        }
+    }
+}
