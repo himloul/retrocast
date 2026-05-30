@@ -141,7 +141,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         frame.release()
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         hapticManager = HapticFeedbackManager(this)
@@ -168,15 +167,13 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
             MaterialTheme(colorScheme = colorScheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    var showCastSheet by remember { mutableStateOf(false) }
-                    val sheetState = rememberModalBottomSheetState()
-                    
                     if (isLandscape) {
                         WideHandheldLayout(
                             nativeRetro = nativeRetro,
                             hapticManager = hapticManager,
                             isCasting = isCasting,
-                            onCastClick = { showCastSheet = true },
+                            castUrl = castUrl,
+                            onCastClick = { toggleCasting() },
                             onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
                             romFiles = romFiles,
                             onRomSelected = { file -> loadLocalRom(file) },
@@ -187,19 +184,14 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                             nativeRetro = nativeRetro,
                             hapticManager = hapticManager,
                             isCasting = isCasting,
+                            castUrl = castUrl,
                             isNativeDisplayConnected = isNativeDisplayConnected,
-                            onCastClick = { showCastSheet = true },
+                            onCastClick = { toggleCasting() },
                             onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
                             romFiles = romFiles,
                             onRomSelected = { file -> loadLocalRom(file) },
                             loadedRomPath = loadedRomPath
                         )
-                    }
-
-                    if (showCastSheet) {
-                        ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surface) {
-                            CastSheetContent(isCasting = isCasting, castUrl = castUrl, onToggleCast = { toggleCasting() })
-                        }
                     }
 
                     if (isDownloading) {
@@ -222,6 +214,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         nativeRetro: NativeRetro,
         hapticManager: HapticFeedbackManager,
         isCasting: Boolean,
+        castUrl: String,
         isNativeDisplayConnected: Boolean,
         onCastClick: () -> Unit,
         onLoadRom: () -> Unit,
@@ -242,11 +235,17 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 }
             }
             if (loadedRomPath != null) {
-                Box(modifier = Modifier.weight(0.45f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    if (!isCasting && !isNativeDisplayConnected) {
-                        AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
-                    } else {
-                        Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                if (isCasting) {
+                    Box(modifier = Modifier.weight(0.45f).fillMaxWidth()) {
+                        CastDashboard(castUrl = castUrl)
+                    }
+                } else {
+                    Box(modifier = Modifier.weight(0.45f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        if (!isNativeDisplayConnected) {
+                            AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                        } else {
+                            Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                        }
                     }
                 }
                 Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
@@ -263,6 +262,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         nativeRetro: NativeRetro,
         hapticManager: HapticFeedbackManager,
         isCasting: Boolean,
+        castUrl: String,
         onCastClick: () -> Unit,
         onLoadRom: () -> Unit,
         romFiles: List<File>,
@@ -271,11 +271,15 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (loadedRomPath != null) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    if (!isCasting && !isNativeDisplayConnected) {
-                        AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
-                    } else {
-                        Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                if (isCasting) {
+                    CastDashboard(castUrl = castUrl)
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        if (!isNativeDisplayConnected) {
+                            AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                        } else {
+                            Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                        }
                     }
                 }
                 TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = true)
@@ -512,25 +516,18 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 }
 
 @Composable
-fun CastSheetContent(isCasting: Boolean, castUrl: String, onToggleCast: () -> Unit) {
+fun CastDashboard(castUrl: String) {
     val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 24.dp).navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Cast to Screen", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        if (!isCasting) {
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Start Web Casting") }
-        } else {
-            Spacer(modifier = Modifier.height(24.dp))
-            QrCodeView(url = castUrl, modifier = Modifier.size(200.dp))
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(castUrl, style = MaterialTheme.typography.titleLarge, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(castUrl, style = MaterialTheme.typography.titleMedium, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             IconButton(onClick = {
                 val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
-            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Gray) }
-            Spacer(modifier = Modifier.height(24.dp))
-            OutlinedButton(onClick = onToggleCast, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Stop Web Casting") }
+            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Gray, modifier = Modifier.size(18.dp)) }
         }
+        Spacer(modifier = Modifier.height(16.dp))
+        QrCodeView(url = castUrl, modifier = Modifier.size(150.dp))
     }
 }
 
