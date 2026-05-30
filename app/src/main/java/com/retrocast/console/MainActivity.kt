@@ -249,7 +249,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = Color.LightGray) }
-                Text("RetroCast", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = Color.White)
                 IconButton(onClick = onCastClick) {
                     Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.LightGray)
                 }
