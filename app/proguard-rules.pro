@@ -2,3 +2,12 @@
 -keep class com.sharescreen.emulator.** { *; }
 -keep class com.sharescreen.streaming.** { *; }
 -keep class com.sharescreen.console.** { *; }
+-dontwarn io.netty.internal.tcnative.**
+-dontwarn org.apache.log4j.**
+-dontwarn org.apache.logging.log4j.**
+-dontwarn org.eclipse.jetty.npn.**
+-dontwarn org.slf4j.impl.**
+-dontwarn reactor.blockhound.**
+-dontwarn java.lang.management.**
+-keep class java.lang.management.ManagementFactory { *; }
+-keep class java.lang.management.RuntimeMXBean { *; }
