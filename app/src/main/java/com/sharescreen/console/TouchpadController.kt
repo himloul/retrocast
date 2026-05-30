@@ -1,7 +1,6 @@
 package com.sharescreen.console
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -114,14 +113,14 @@ fun TouchpadController(
             ) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val r = minOf(maxWidth, maxHeight) / 2
-                    val diagR = r - 20.dp
+                    val diagR = r - 22.dp
                     val diagComp = diagR * 0.707f
                     val off = r - diagComp - 6.dp
 
-                    DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 1.dp), isPressed = 4 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-1).dp), isPressed = 5 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 1.dp), isPressed = 6 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-1).dp), isPressed = 7 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 3.dp), isPressed = 4 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-3).dp), isPressed = 5 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 3.dp), isPressed = 6 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-3).dp), isPressed = 7 in pressedButtons)
                     DiagonalDot(Modifier.align(Alignment.TopStart).offset(x = off, y = off), isPressed = 4 in pressedButtons && 6 in pressedButtons)
                     DiagonalDot(Modifier.align(Alignment.TopEnd).offset(x = -off, y = off), isPressed = 4 in pressedButtons && 7 in pressedButtons)
                     DiagonalDot(Modifier.align(Alignment.BottomStart).offset(x = off, y = -off), isPressed = 5 in pressedButtons && 6 in pressedButtons)
@@ -176,8 +175,7 @@ fun TouchpadController(
 fun GamepadBase(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = modifier
-            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), CircleShape)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape),
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape),
         contentAlignment = Alignment.Center,
         content = content
     )
@@ -189,7 +187,7 @@ fun DPadCircle(modifier: Modifier, isPressed: Boolean) {
         modifier = modifier
             .size(24.dp)
             .clip(CircleShape)
-            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.60f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.30f))
     )
 }
 
@@ -199,7 +197,7 @@ fun DiagonalDot(modifier: Modifier, isPressed: Boolean) {
         modifier = modifier
             .size(12.dp)
             .clip(CircleShape)
-            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.50f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
     )
 }
 
@@ -210,8 +208,7 @@ fun ActionCircle(label: String, modifier: Modifier, accent: Color, onInput: (Int
         modifier = modifier
             .size(55.dp)
             .clip(CircleShape)
-            .background(if (isPressed) accent.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-            .border(1.5.dp, if (isPressed) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape)
+            .background(if (isPressed) accent.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -222,7 +219,7 @@ fun ActionCircle(label: String, modifier: Modifier, accent: Color, onInput: (Int
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = if (isPressed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontSize = 18.sp, fontWeight = FontWeight.Black)
+        Text(label, color = if (isPressed) Color.White else MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 18.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -233,8 +230,7 @@ fun CircleControlButton(label: String, onToggle: (Boolean) -> Unit) {
         modifier = Modifier
             .size(54.dp)
             .clip(CircleShape)
-            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
-            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -256,8 +252,7 @@ fun IconPillButton(icon: ImageVector, onToggle: (Boolean) -> Unit) {
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
-            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
