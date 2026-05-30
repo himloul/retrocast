@@ -1,4 +1,4 @@
-package com.sharescreen.streaming
+package com.retrocast.streaming
 
 import android.content.Context
 import android.util.Log

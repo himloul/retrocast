@@ -1,7 +1,7 @@
 -keep class org.webrtc.** { *; }
--keep class com.sharescreen.emulator.** { *; }
--keep class com.sharescreen.streaming.** { *; }
--keep class com.sharescreen.console.** { *; }
+-keep class com.retrocast.emulator.** { *; }
+-keep class com.retrocast.streaming.** { *; }
+-keep class com.retrocast.console.** { *; }
 -dontwarn io.netty.internal.tcnative.**
 -dontwarn org.apache.log4j.**
 -dontwarn org.apache.logging.log4j.**

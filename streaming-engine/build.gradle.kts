@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.sharescreen.streaming"
+    namespace = "com.retrocast.streaming"
     compileSdk = 34
 
     defaultConfig {

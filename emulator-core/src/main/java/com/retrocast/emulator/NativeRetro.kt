@@ -1,4 +1,4 @@
-package com.sharescreen.emulator
+package com.retrocast.emulator
 
 import java.nio.ByteBuffer
 

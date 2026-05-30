@@ -1,4 +1,4 @@
-package com.sharescreen.console
+package com.retrocast.console
 
 import android.content.Context
 import android.net.nsd.NsdManager
@@ -34,7 +34,7 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                 get("/") {
                     call.respondHtml {
                         head {
-                            title("ShareScreen Receiver")
+                            title("RetroCast Receiver")
                             style {
                                 unsafe {
                                     +"""
@@ -195,7 +195,7 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
 
     private fun registerService(servicePort: Int) {
         val serviceInfo = NsdServiceInfo().apply {
-            serviceName = "ShareScreen-Console"
+            serviceName = "RetroCast-Console"
             serviceType = "_http._tcp."
             port = servicePort
         }

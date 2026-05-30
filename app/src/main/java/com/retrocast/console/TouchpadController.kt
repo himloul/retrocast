@@ -1,4 +1,4 @@
-package com.sharescreen.console
+package com.retrocast.console
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -20,7 +20,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.sharescreen.emulator.NativeRetro
+import com.retrocast.emulator.NativeRetro
 import kotlin.math.*
 
 @Composable

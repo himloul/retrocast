@@ -13,7 +13,7 @@ dependencyResolutionManagement {
         maven { url = uri("https://jitpack.io") }
     }
 }
-rootProject.name = "ShareScreenConsole"
+rootProject.name = "RetroCastConsole"
 include(":app")
 include(":emulator-core")
 include(":streaming-engine")

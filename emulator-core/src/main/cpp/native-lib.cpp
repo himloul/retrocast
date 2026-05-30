@@ -222,7 +222,7 @@ bool env_cb(unsigned cmd, void *data) {
 }
 
 extern "C" {
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_init(JNIEnv* env, jobject, jstring path) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env, jobject, jstring path) {
     LOGI("=== init() called ===");
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.core_handle = dlopen(p, RTLD_LAZY); env->ReleaseStringUTFChars(path, p);
     LOGI("init: dlopen(%s) = %p", p, g_engine.core_handle);
@@ -237,15 +237,15 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_init(JNIEnv* en
     LOGI("init: done (Oboe deferred to loadGame)");
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
     if (!g_engine.get_mem_data || g_engine.rom_path.empty()) return;
     void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); size_t s = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
     if (d && s > 0) { std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav"; std::ofstream f(p, std::ios::binary); if (f.is_open()) { f.write((const char*)d, s); f.close(); } }
 }
 
-JNIEXPORT jboolean JNICALL Java_com_sharescreen_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
+JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
     LOGI("loadGame called");
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;
     struct retro_game_info info = { p, nullptr, 0, nullptr }; bool ok = ((bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game"))(&info);
@@ -267,7 +267,7 @@ JNIEXPORT jboolean JNICALL Java_com_sharescreen_emulator_NativeRetro_loadGame(JN
     env->ReleaseStringUTFChars(path, p); g_engine.core_run = (retro_run_t)dlsym(g_engine.core_handle, "retro_run"); LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, jobject) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_start(JNIEnv*, jobject) {
     g_engine.emu_running = true;
     g_engine.emu_thread = std::thread([]{
         auto frame_duration = std::chrono::duration<double, std::nano>(1.0 / g_engine.av_fps * 1e9);
@@ -288,9 +288,9 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_start(JNIEnv*, 
     });
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_unloadGame(JNIEnv*, jobject) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_unloadGame(JNIEnv*, jobject) {
     LOGI("=== unloadGame() called ===");
     if (g_engine.core_handle) {
         auto retro_unload_game = (void (*)())dlsym(g_engine.core_handle, "retro_unload_game");
@@ -302,7 +302,7 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_unloadGame(JNIE
     g_engine.audio_rb.tail = 0;
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setLocalAudioMuted(JNIEnv*, jobject, jboolean muted) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setLocalAudioMuted(JNIEnv*, jobject, jboolean muted) {
     g_engine.local_audio_muted.store(muted);
     if (muted && g_engine.audio_stream) {
         g_engine.audio_stream->stop();
@@ -313,7 +313,7 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setLocalAudioMu
     }
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
     if(g_engine.callback_obj) env->DeleteGlobalRef(g_engine.callback_obj);
     if(g_engine.argb_buf) env->DeleteGlobalRef(g_engine.argb_buf);
     if(g_engine.i420_buf) env->DeleteGlobalRef(g_engine.i420_buf);
@@ -334,7 +334,7 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNI
     }
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setAudioCallback(JNIEnv* env, jobject, jobject cb, jobject buf) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setAudioCallback(JNIEnv* env, jobject, jobject cb, jobject buf) {
     if (g_engine.audio_cb_obj) env->DeleteGlobalRef(g_engine.audio_cb_obj);
     if (g_engine.audio_buf) env->DeleteGlobalRef(g_engine.audio_buf);
     if (cb) {
@@ -349,8 +349,8 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setAudioCallbac
     }
 }
 
-JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) { LOGI("setInputState: %d", s); g_engine.input_state = (uint16_t)s; }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) { LOGI("setInputState: %d", s); g_engine.input_state = (uint16_t)s; }
 
-JNIEXPORT jint JNICALL Java_com_sharescreen_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) { return (jint)g_engine.av_sample_rate; }
-JNIEXPORT jstring JNICALL Java_com_sharescreen_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject) { return env->NewStringUTF("Zenith Engine v5.0"); }
+JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) { return (jint)g_engine.av_sample_rate; }
+JNIEXPORT jstring JNICALL Java_com_retrocast_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject) { return env->NewStringUTF("Zenith Engine v5.0"); }
 }

@@ -1,4 +1,4 @@
-# ShareScreen Console
+# RetroCast Console
 
 Android GBA emulator that streams video and audio to any browser on the local network. The device serves as controller, emulator host, and WebRTC streaming source — no cloud, no servers, no setup.
 

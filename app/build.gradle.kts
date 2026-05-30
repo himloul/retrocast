@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.sharescreen.console"
+    namespace = "com.retrocast.console"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.sharescreen.console"
+        applicationId = "com.retrocast.console"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

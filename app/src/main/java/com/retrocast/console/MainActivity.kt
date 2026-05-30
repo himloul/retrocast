@@ -1,4 +1,4 @@
-package com.sharescreen.console
+package com.retrocast.console
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -36,10 +36,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.lifecycleScope
-import com.sharescreen.emulator.NativeRetro
-import com.sharescreen.streaming.LibretroVideoCapturer
-import com.sharescreen.streaming.I420BufferPool
-import com.sharescreen.streaming.StreamingManager
+import com.retrocast.emulator.NativeRetro
+import com.retrocast.streaming.LibretroVideoCapturer
+import com.retrocast.streaming.I420BufferPool
+import com.retrocast.streaming.StreamingManager
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*

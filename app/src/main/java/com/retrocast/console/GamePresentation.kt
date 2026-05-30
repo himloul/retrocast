@@ -1,4 +1,4 @@
-package com.sharescreen.console
+package com.retrocast.console
 
 import android.app.Presentation
 import android.content.Context

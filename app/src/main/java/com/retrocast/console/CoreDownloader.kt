@@ -1,4 +1,4 @@
-package com.sharescreen.console
+package com.retrocast.console
 
 import android.os.Build
 import io.ktor.client.*

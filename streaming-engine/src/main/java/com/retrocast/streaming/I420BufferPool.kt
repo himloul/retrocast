@@ -1,4 +1,4 @@
-package com.sharescreen.streaming
+package com.retrocast.streaming
 
 import org.webrtc.JavaI420Buffer
 import org.webrtc.VideoFrame

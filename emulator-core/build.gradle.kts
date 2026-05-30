@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.sharescreen.emulator"
+    namespace = "com.retrocast.emulator"
     compileSdk = 34
 
     defaultConfig {
