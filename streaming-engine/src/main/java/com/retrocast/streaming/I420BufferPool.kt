@@ -28,10 +28,20 @@ class PooledI420Buffer(
     override fun getStrideU(): Int = uvStrideVal
     override fun getStrideV(): Int = uvStrideVal
 
-    override fun retain() { refCount.incrementAndGet() }
+    override fun retain() {
+        val prev = refCount.getAndUpdate { v -> if (v > 0) v + 1 else v }
+        if (prev <= 0) {
+            throw IllegalStateException("retain() called on an object with refcount < 1")
+        }
+    }
 
     override fun release() {
-        if (refCount.decrementAndGet() <= 0) {
+        val newCount = refCount.decrementAndGet()
+        if (newCount < 0) {
+            refCount.incrementAndGet()
+            throw IllegalStateException("release() called on an object with refcount < 1")
+        }
+        if (newCount == 0) {
             onRelease?.invoke()
         }
     }

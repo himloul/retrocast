@@ -142,7 +142,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
         val frame = VideoFrame(buf, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
-        frame.release()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
