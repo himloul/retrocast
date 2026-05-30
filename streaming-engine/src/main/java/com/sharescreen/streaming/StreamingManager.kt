@@ -56,13 +56,27 @@ class StreamingManager(private val context: Context) {
         videoTrack?.setEnabled(true)
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
+        configureBitrate()
 
         audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
     }
 
-    private fun mangleSdp(sdp: String): String {
-        return sdp.replace("useinbandfec=1", "useinbandfec=1;x-google-min-bitrate=5000;x-google-max-bitrate=10000;x-google-start-bitrate=8000")
-            .replace("a=fmtp:111", "a=fmtp:111 minptime=10;useinbandfec=1")
+    private fun configureBitrate() {
+        peerConnection?.getSenders()?.forEach { sender ->
+            if (sender.track()?.kind() == "video") {
+                try {
+                    val params = sender.parameters
+                    params.encodings?.forEach { encoding ->
+                        encoding.maxBitrateBps = 2000000
+                        encoding.minBitrateBps = 256000
+                        encoding.maxFramerate = 60
+                    }
+                    sender.parameters = params
+                } catch (e: Exception) {
+                    Log.w("StreamingManager", "Failed to configure bitrate: ${e.message}")
+                }
+            }
+        }
     }
 
     fun createOffer(callback: (SessionDescription?) -> Unit) {
@@ -74,13 +88,12 @@ class StreamingManager(private val context: Context) {
         peerConnection?.createOffer(object : SdpObserver {
             override fun onCreateSuccess(sdp: SessionDescription?) {
                 sdp?.let {
-                    val mangledSdp = SessionDescription(it.type, mangleSdp(it.description))
                     peerConnection?.setLocalDescription(object : SdpObserver {
                         override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onSetSuccess() { callback(mangledSdp) }
+                        override fun onSetSuccess() { callback(it) }
                         override fun onCreateFailure(p0: String?) {}
                         override fun onSetFailure(p0: String?) { callback(null) }
-                    }, mangledSdp)
+                    }, it)
                 }
             }
             override fun onSetSuccess() {}
@@ -90,13 +103,12 @@ class StreamingManager(private val context: Context) {
     }
 
     fun setRemoteDescription(sdp: SessionDescription, callback: (Boolean) -> Unit) {
-        val mangledSdp = SessionDescription(sdp.type, mangleSdp(sdp.description))
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {}
             override fun onSetSuccess() { callback(true) }
             override fun onCreateFailure(p0: String?) {}
             override fun onSetFailure(p0: String?) { callback(false) }
-        }, mangledSdp)
+        }, sdp)
     }
 
     fun sendAudio(buffer: ByteBuffer, samples: Int) {

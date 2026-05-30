@@ -17,6 +17,7 @@ import java.time.Duration
 
 class SignalingServer(private val context: Context, private val port: Int = 8080) {
     private var server: NettyApplicationEngine? = null
+    @Volatile
     private var currentSession: WebSocketServerSession? = null
     private var nsdManager: NsdManager? = null
 
@@ -55,109 +56,111 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                             script {
                                 unsafe {
                                     +"""
-                                        const status = document.getElementById('status');
-                                        const video = document.getElementById('remoteVideo');
-                                        let ws;
+                                         const status = document.getElementById('status');
+                                         const video = document.getElementById('remoteVideo');
+                                         let ws;
                                          let audioCtx = null;
                                          let audioScheduledTime = 0;
                                          let targetSampleRate = 44100;
+                                         let audioQueue = [];
+                                         let audioPlaying = false;
+
+                                         function scheduleAudioQueue() {
+                                             audioPlaying = true;
+                                             const now = audioCtx.currentTime;
+                                             if (audioScheduledTime < now + 0.05 || audioScheduledTime - now > 0.5) {
+                                                 audioScheduledTime = now + 0.1;
+                                             }
+                                             while (audioQueue.length > 0) {
+                                                 const buf = audioQueue.shift();
+                                                 const src = audioCtx.createBufferSource();
+                                                 src.buffer = buf;
+                                                 src.connect(audioCtx.destination);
+                                                 src.start(audioScheduledTime);
+                                                 audioScheduledTime += buf.duration;
+                                             }
+                                             audioPlaying = false;
+                                             if (audioQueue.length > 0) scheduleAudioQueue();
+                                         }
 
                                          function connect() {
-                                            ws = new WebSocket('ws://' + location.host + '/ws');
-                                            
-                                            const pc = new RTCPeerConnection({
-                                                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                                            });
+                                             ws = new WebSocket('ws://' + location.host + '/ws');
+                                             
+                                             const pc = new RTCPeerConnection({
+                                                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                                             });
 
-                                            pc.ondatachannel = (event) => {
-                                                const dc = event.channel;
-                                                if (dc.label === 'audio') {
-                                                    dc.binaryType = 'arraybuffer';
-                                                    dc.onmessage = (e) => {
-                                                        try {
-                                                            if (!audioCtx) return;
-                                                            if (audioCtx.state === 'suspended') audioCtx.resume();
-
-                                                            const raw = e.data;
-                                                            let pcm;
-                                                            if (raw instanceof ArrayBuffer) {
-                                                                pcm = new Int16Array(raw);
-                                                            } else if (raw instanceof Blob) {
-                                                                return;
-                                                            } else {
-                                                                pcm = new Int16Array(raw);
-                                                            }
-                                                            if (pcm.length < 2) return;
+                                             pc.ondatachannel = (event) => {
+                                                 const dc = event.channel;
+                                                 if (dc.label === 'audio') {
+                                                     dc.binaryType = 'arraybuffer';
+                                                     dc.onmessage = (e) => {
+                                                         try {
+                                                             if (!audioCtx) return;
+                                                             if (audioCtx.state === 'suspended') audioCtx.resume();
+                                                             const raw = e.data;
+                                                             const pcm = new Int16Array(raw);
+                                                             if (pcm.length < 4) return;
                                                              const frames = pcm.length / 2;
                                                              const buffer = audioCtx.createBuffer(2, frames, targetSampleRate);
                                                              const left = buffer.getChannelData(0);
-                                                            const right = buffer.getChannelData(1);
-                                                            for (let i = 0; i < frames; i++) {
-                                                                left[i] = pcm[i * 2] / 32768;
-                                                                right[i] = pcm[i * 2 + 1] / 32768;
-                                                            }
-                                                            const src = audioCtx.createBufferSource();
-                                                            src.buffer = buffer;
-                                                            src.connect(audioCtx.destination);
+                                                             const right = buffer.getChannelData(1);
+                                                             for (let i = 0; i < frames; i++) {
+                                                                 left[i] = pcm[i * 2] / 32768;
+                                                                 right[i] = pcm[i * 2 + 1] / 32768;
+                                                             }
+                                                             audioQueue.push(buffer);
+                                                             if (audioQueue.length >= 3 && !audioPlaying) scheduleAudioQueue();
+                                                         } catch (err) {
+                                                             console.error('Audio error:', err);
+                                                         }
+                                                     };
+                                                 }
+                                             };
 
-                                                            const now = audioCtx.currentTime;
-                                                            if (audioScheduledTime < now) {
-                                                                audioScheduledTime = now + 0.05;
-                                                            } else if (audioScheduledTime - now > 0.2) {
-                                                                audioScheduledTime = now + 0.05;
-                                                            }
-                                                            src.start(audioScheduledTime);
-                                                            audioScheduledTime += buffer.duration;
-                                                        } catch (err) {
-                                                            console.error('Audio error:', err);
-                                                        }
-                                                    };
-                                                }
-                                            };
+                                             pc.ontrack = (event) => {
+                                                 console.log('Track received:', event.track.kind);
+                                                 status.innerText = 'Streaming Active';
+                                                 if (video.srcObject !== event.streams[0]) {
+                                                     video.srcObject = event.streams[0];
+                                                 }
+                                             };
 
-                                            pc.ontrack = (event) => {
-                                                console.log('Track received:', event.track.kind);
-                                                status.innerText = 'Streaming Active';
-                                                if (video.srcObject !== event.streams[0]) {
-                                                    video.srcObject = event.streams[0];
-                                                }
-                                            };
-
-                                            pc.onconnectionstatechange = () => {
-                                                console.log('State:', pc.connectionState);
-                                                if (pc.connectionState === 'connected') status.innerText = 'Connected';
-                                            };
+                                             pc.onconnectionstatechange = () => {
+                                                 console.log('State:', pc.connectionState);
+                                                 if (pc.connectionState === 'connected') status.innerText = 'Connected';
+                                             };
 
                                              ws.onmessage = async (event) => {
                                                  const msg = JSON.parse(event.data);
                                                  if (msg.type === 'offer') {
                                                      if (msg.sampleRate) targetSampleRate = msg.sampleRate;
                                                      await pc.setRemoteDescription(new RTCSessionDescription(msg));
-                                                    const answer = await pc.createAnswer();
-                                                    await pc.setLocalDescription(answer);
-                                                    ws.send(JSON.stringify(pc.localDescription));
-                                                } else if (msg.candidate) {
-                                                    await pc.addIceCandidate(new RTCIceCandidate(msg));
-                                                }
-                                            };
+                                                     const answer = await pc.createAnswer();
+                                                     await pc.setLocalDescription(answer);
+                                                     ws.send(JSON.stringify(pc.localDescription));
+                                                 } else if (msg.candidate) {
+                                                     await pc.addIceCandidate(new RTCIceCandidate(msg));
+                                                 }
+                                             };
 
-                                            pc.onicecandidate = (event) => {
-                                                if (event.candidate) ws.send(JSON.stringify(event.candidate));
-                                            };
-                                            
-                                            ws.onclose = () => setTimeout(connect, 2000);
-                                        }
+                                             pc.onicecandidate = (event) => {
+                                                 if (event.candidate) ws.send(JSON.stringify(event.candidate));
+                                             };
+                                             
+                                             ws.onclose = () => setTimeout(connect, 2000);
+                                         }
 
-                                        window.onclick = () => {
-                                            video.play().catch(e => console.log('Play error:', e));
-                                            status.innerText = 'Connecting...';
-                                            if (!ws) connect();
+                                         window.onclick = () => {
+                                             video.play().catch(e => console.log('Play error:', e));
+                                             status.innerText = 'Connecting...';
+                                             if (!ws) connect();
                                              if (!audioCtx) {
                                                  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: targetSampleRate });
-                                                 audioScheduledTime = audioCtx.currentTime + 0.05;
+                                                 audioScheduledTime = audioCtx.currentTime + 0.1;
                                              }
-                                            if (audioCtx.state === 'suspended') audioCtx.resume();
-                                        };
+                                             if (audioCtx.state === 'suspended') audioCtx.resume();
+                                         };
                                     """.trimIndent()
                                 }
                             }

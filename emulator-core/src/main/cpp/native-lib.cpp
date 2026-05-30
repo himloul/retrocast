@@ -115,6 +115,10 @@ static bool setupOboeStream(int32_t sampleRate) {
     return true;
 }
 
+static inline uint8_t clamp_uint8(int v) {
+    return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+}
+
 void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
     if (!data || !g_engine.argb_ptr) return;
 
@@ -157,13 +161,13 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
                 int b = (pixel >> 16) & 0xFF;
 
                 int yy = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                y_plane[y * w + x] = (uint8_t)(yy < 0 ? 0 : yy > 255 ? 255 : yy);
+                y_plane[y * w + x] = clamp_uint8(yy);
 
                 if ((y & 1) == 0 && (x & 1) == 0) {
                     int uu = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
                     int vv = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-                    u_plane[(y / 2) * (w / 2) + (x / 2)] = (uint8_t)(uu < 0 ? 0 : uu > 255 ? 255 : uu);
-                    v_plane[(y / 2) * (w / 2) + (x / 2)] = (uint8_t)(vv < 0 ? 0 : vv > 255 ? 255 : vv);
+                    u_plane[(y / 2) * (w / 2) + (x / 2)] = clamp_uint8(uu);
+                    v_plane[(y / 2) * (w / 2) + (x / 2)] = clamp_uint8(vv);
                 }
             }
         }
@@ -175,24 +179,33 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         g_engine.i420_buf, (jint)w, (jint)(w / 2));
 }
 
+static void sendAudioToJava(const int16_t *d, size_t f) {
+    if (g_engine.audio_cb_obj && g_engine.audio_buf) {
+        JNIEnv* env;
+        g_engine.jvm->AttachCurrentThread(&env, nullptr);
+        size_t bytes = f * 2 * sizeof(int16_t);
+        jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
+        if ((jsize)bytes <= cap) {
+            void* buf_ptr = env->GetDirectBufferAddress(g_engine.audio_buf);
+            memcpy(buf_ptr, d, bytes);
+            env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)(f * 2));
+        }
+    }
+}
+
 size_t audio_batch_cb(const int16_t *d, size_t f) {
+    if (g_engine.local_audio_muted.load()) {
+        sendAudioToJava(d, f);
+        return f;
+    }
+
     size_t needed = f * 2;
     while (g_engine.audio_rb.available_to_write() < needed && g_engine.emu_running) {
         std::this_thread::yield();
     }
     if (!g_engine.emu_running) return 0;
     g_engine.audio_rb.write(d, needed);
-    if (g_engine.audio_cb_obj && g_engine.audio_buf) {
-        JNIEnv* env;
-        g_engine.jvm->AttachCurrentThread(&env, nullptr);
-        size_t ns = f * 2;
-        jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
-        if ((jsize)(ns * 2) <= cap) {
-            void* buf_ptr = env->GetDirectBufferAddress(g_engine.audio_buf);
-            memcpy(buf_ptr, d, ns * 2);
-            env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)ns);
-        }
-    }
+    sendAudioToJava(d, f);
     return f;
 }
 int16_t input_state_cb(unsigned p, unsigned d, unsigned i, unsigned id) { return (p==0 && d==RETRO_DEVICE_JOYPAD) ? ((g_engine.input_state.load() & (1<<id))?1:0) : (int16_t)0; }
@@ -291,6 +304,13 @@ JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_unloadGame(JNIE
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setLocalAudioMuted(JNIEnv*, jobject, jboolean muted) {
     g_engine.local_audio_muted.store(muted);
+    if (muted && g_engine.audio_stream) {
+        g_engine.audio_stream->stop();
+        g_engine.audio_stream->close();
+        g_engine.audio_stream.reset();
+    } else if (!muted) {
+        setupOboeStream((int32_t)g_engine.av_sample_rate);
+    }
 }
 
 JNIEXPORT void JNICALL Java_com_sharescreen_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {

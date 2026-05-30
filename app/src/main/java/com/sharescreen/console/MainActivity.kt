@@ -38,6 +38,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.lifecycleScope
 import com.sharescreen.emulator.NativeRetro
 import com.sharescreen.streaming.LibretroVideoCapturer
+import com.sharescreen.streaming.I420BufferPool
 import com.sharescreen.streaming.StreamingManager
 import kotlinx.coroutines.launch
 import org.json.JSONObject
@@ -84,6 +85,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var pixelBuffer: ByteBuffer? = null
     private var i420Buffer: ByteBuffer? = null
     private var audioBuffer: ByteBuffer? = null
+    private val i420BufferPool = I420BufferPool()
 
     private val saveHandler = Handler(Looper.getMainLooper())
     private val saveRunnable = object : Runnable {
@@ -127,19 +129,18 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         nativePresentation?.setFrame(pixels, width, height)
         if (!isCasting) return
 
-        val i420Buffer = JavaI420Buffer.allocate(width, height)
-        i420.rewind()
+        val buf = i420BufferPool.acquire(width, height, yStride, uvStride)
         val ySize = yStride * height
         val uvSize = uvStride * (height / 2)
 
         i420.position(0).limit(ySize)
-        i420Buffer.dataY.put(i420.slice())
+        buf.dataY.put(i420.slice())
         i420.position(ySize).limit(ySize + uvSize)
-        i420Buffer.dataU.put(i420.slice())
+        buf.dataU.put(i420.slice())
         i420.position(ySize + uvSize).limit(ySize + uvSize * 2)
-        i420Buffer.dataV.put(i420.slice())
+        buf.dataV.put(i420.slice())
 
-        val frame = VideoFrame(i420Buffer, 0, System.nanoTime())
+        val frame = VideoFrame(buf, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
         frame.release()
     }
