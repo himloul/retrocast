@@ -31,7 +31,7 @@ class StreamingManager(private val context: Context) {
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setOptions(factoryOptions)
             .setAudioDeviceModule(audioDeviceModule)
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true))
+            .setVideoEncoderFactory(createH264EncoderFactory())
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
             .createPeerConnectionFactory()
     }
@@ -67,8 +67,8 @@ class StreamingManager(private val context: Context) {
                 try {
                     val params = sender.parameters
                     params.encodings?.forEach { encoding ->
-                        encoding.maxBitrateBps = 2000000
-                        encoding.minBitrateBps = 256000
+                        encoding.maxBitrateBps = 4000000
+                        encoding.minBitrateBps = 512000
                         encoding.maxFramerate = 60
                     }
                     sender.parameters = params
@@ -76,6 +76,23 @@ class StreamingManager(private val context: Context) {
                     Log.w("StreamingManager", "Failed to configure bitrate: ${e.message}")
                 }
             }
+        }
+    }
+
+    private fun createH264EncoderFactory(): VideoEncoderFactory {
+        val defaultFactory = DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
+        return try {
+            val h264Codecs = defaultFactory.getSupportedCodecs().filter { it.name == "H264" }
+            if (h264Codecs.isNotEmpty()) {
+                object : VideoEncoderFactory {
+                    override fun createEncoder(info: VideoCodecInfo): VideoEncoder? =
+                        defaultFactory.createEncoder(info)
+                    override fun getSupportedCodecs(): Array<VideoCodecInfo> =
+                        h264Codecs.toTypedArray()
+                }
+            } else defaultFactory
+        } catch (e: Exception) {
+            defaultFactory
         }
     }
 

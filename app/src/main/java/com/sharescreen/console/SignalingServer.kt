@@ -39,7 +39,7 @@ class SignalingServer(private val context: Context, private val port: Int = 8080
                                 unsafe {
                                     +"""
                                         body { margin: 0; background: black; color: white; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; font-family: sans-serif; }
-                                        video { width: 100%; height: 100%; object-fit: contain; background: #050505; }
+                                        video { width: 100%; height: 100%; object-fit: contain; background: #050505; image-rendering: pixelated; }
                                         #status { position: absolute; top: 20px; left: 20px; color: rgba(255,255,255,0.4); font-size: 14px; font-weight: bold; background: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1); }
                                     """.trimIndent()
                                 }
