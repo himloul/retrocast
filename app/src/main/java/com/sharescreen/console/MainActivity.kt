@@ -9,6 +9,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.Display
+import android.view.View
+import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -143,6 +146,23 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.decorView.post {
+            @Suppress("DEPRECATION")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.setDecorFitsSystemWindows(false)
+                window.insetsController?.apply {
+                    hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                    systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                    or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                )
+            }
+        }
         hapticManager = HapticFeedbackManager(this)
         nativeRetro = NativeRetro()
         
@@ -511,6 +531,24 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         if (isCoreReady) nativeRetro.stop()
         if (isCoreInitialized) nativeRetro.unloadGame()
         signalingServer?.stop(); streamingManager?.dispose()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            window.decorView.post {
+                @Suppress("DEPRECATION")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    window.insetsController?.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                } else {
+                    window.decorView.systemUiVisibility = (
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    )
+                }
+            }
+        }
     }
 
 }
