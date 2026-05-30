@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.Display
 import android.widget.Toast
@@ -157,11 +158,15 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         ThumbnailManager.init(this)
         refreshRomLibrary()
         setContent {
-            val darkColorScheme = darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
+            val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dynamicDarkColorScheme(this)
+            } else {
+                darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
+            }
             val configuration = LocalConfiguration.current
             val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
-            MaterialTheme(colorScheme = darkColorScheme) {
+            MaterialTheme(colorScheme = colorScheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
                     var showCastSheet by remember { mutableStateOf(false) }
                     val sheetState = rememberModalBottomSheetState()
@@ -192,7 +197,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     }
 
                     if (showCastSheet) {
-                        ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = Color(0xFF121212)) {
+                        ModalBottomSheet(onDismissRequest = { showCastSheet = false }, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surface) {
                             CastSheetContent(isCasting = isCasting, castUrl = castUrl, onToggleCast = { toggleCasting() })
                         }
                     }
@@ -574,7 +579,7 @@ fun GameCard(rom: File, onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier.size(120.dp),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A1A2E))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             if (thumbnail != null) {
@@ -588,7 +593,7 @@ fun GameCard(rom: File, onClick: () -> Unit) {
                 Surface(
                     modifier = Modifier.size(56.dp),
                     shape = RoundedCornerShape(28.dp),
-                    color = Color(0xFF2D2D44)
+                    color = MaterialTheme.colorScheme.primaryContainer
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(initials, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)

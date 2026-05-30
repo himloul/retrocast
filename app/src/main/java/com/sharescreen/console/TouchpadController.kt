@@ -7,7 +7,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -23,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sharescreen.emulator.NativeRetro
+import kotlin.math.*
 
 @Composable
 fun TouchpadController(
@@ -50,11 +50,83 @@ fun TouchpadController(
                 if (pressed) hapticManager.triggerTick()
             }
 
-            GamepadBase(modifier = Modifier.size(dpadSize)) {
-                DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 8.dp), 4) { nativeRetro.setButton(4, it > 0); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-8).dp), 5) { nativeRetro.setButton(5, it > 0); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 8.dp), 6) { nativeRetro.setButton(6, it > 0); if(it > 0) hapticManager.triggerTick() }
-                DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-8).dp), 7) { nativeRetro.setButton(7, it > 0); if(it > 0) hapticManager.triggerTick() }
+            var pressedButtons by remember { mutableStateOf(setOf<Int>()) }
+            val haptic = hapticManager
+
+            GamepadBase(
+                modifier = Modifier
+                    .size(dpadSize)
+                    .clip(CircleShape)
+                    .pointerInput(nativeRetro, haptic) {
+                        awaitEachGesture {
+                            val cx = size.width / 2f
+                            val cy = size.height / 2f
+                            val center = Offset(cx, cy)
+                            val maxDist = minOf(size.width, size.height) / 2f
+                            val deadZone = maxDist * 0.20f
+
+                            fun positionToButtons(pos: Offset): Set<Int> {
+                                val dx = pos.x - center.x
+                                val dy = pos.y - center.y
+                                val dist = sqrt(dx * dx + dy * dy)
+                                if (dist < deadZone || dist > maxDist) return emptySet()
+                                val angle = (atan2(-dy, dx) * 180f / PI.toFloat() + 360f) % 360f
+                                return when {
+                                    angle < 22.5f || angle >= 337.5f -> setOf(7)
+                                    angle < 67.5f -> setOf(4, 7)
+                                    angle < 112.5f -> setOf(4)
+                                    angle < 157.5f -> setOf(4, 6)
+                                    angle < 202.5f -> setOf(6)
+                                    angle < 247.5f -> setOf(5, 6)
+                                    angle < 292.5f -> setOf(5)
+                                    else -> setOf(5, 7)
+                                }
+                            }
+
+                            var lastButtons = emptySet<Int>()
+
+                            fun updateButtons(buttons: Set<Int>) {
+                                if (buttons == lastButtons) return
+                                (lastButtons - buttons).forEach { nativeRetro.setButton(it, false) }
+                                (buttons - lastButtons).forEach { nativeRetro.setButton(it, true) }
+                                if (buttons.isNotEmpty() && lastButtons.isNotEmpty()) {
+                                    haptic.triggerTick()
+                                }
+                                lastButtons = buttons
+                                pressedButtons = buttons
+                            }
+
+                            val down = awaitFirstDown()
+                            updateButtons(positionToButtons(down.position))
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull() ?: break
+                                if (!change.pressed) break
+                                updateButtons(positionToButtons(change.position))
+                                change.consume()
+                            }
+
+                            lastButtons.forEach { nativeRetro.setButton(it, false) }
+                            pressedButtons = emptySet()
+                        }
+                    }
+            ) {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val r = minOf(maxWidth, maxHeight) / 2
+                    val diagR = r - 20.dp
+                    val diagComp = diagR * 0.707f
+                    val off = r - diagComp - 6.dp
+
+                    DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 1.dp), isPressed = 4 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-1).dp), isPressed = 5 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 1.dp), isPressed = 6 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-1).dp), isPressed = 7 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.TopStart).offset(x = off, y = off), isPressed = 4 in pressedButtons && 6 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.TopEnd).offset(x = -off, y = off), isPressed = 4 in pressedButtons && 7 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.BottomStart).offset(x = off, y = -off), isPressed = 5 in pressedButtons && 6 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.BottomEnd).offset(x = -off, y = -off), isPressed = 5 in pressedButtons && 7 in pressedButtons)
+                }
             }
         }
 
@@ -72,10 +144,10 @@ fun TouchpadController(
             }
 
             GamepadBase(modifier = Modifier.size(dpadSize)) {
-                ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), Color(0xFFEF9A9A)) { 
+                ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), MaterialTheme.colorScheme.tertiary) { 
                     nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
                 }
-                ActionCircle("B", Modifier.align(Alignment.Center).offset(x = (-22).dp, y = 22.dp), Color(0xFFFFF59D)) { 
+                ActionCircle("B", Modifier.align(Alignment.Center).offset(x = (-22).dp, y = 22.dp), MaterialTheme.colorScheme.secondary) { 
                     nativeRetro.setButton(0, it > 0); if (it > 0) hapticManager.triggerClick() 
                 }
             }
@@ -104,30 +176,30 @@ fun TouchpadController(
 fun GamepadBase(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = modifier
-            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
-            .background(Color.White.copy(alpha = 0.08f), CircleShape),
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), CircleShape)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape),
         contentAlignment = Alignment.Center,
         content = content
     )
 }
 
 @Composable
-fun DPadCircle(modifier: Modifier, id: Int, onInput: (Int) -> Unit) {
-    var isPressed by remember { mutableStateOf(false) }
+fun DPadCircle(modifier: Modifier, isPressed: Boolean) {
     Box(
         modifier = modifier
-            .size(44.dp)
+            .size(24.dp)
             .clip(CircleShape)
-            .background(if (isPressed) Color.White.copy(alpha = 0.35f) else Color.White.copy(alpha = 0.05f))
-            .border(1.dp, Color.White.copy(alpha = if (isPressed) 0.6f else 0.15f), CircleShape)
-            .pointerInput(id) {
-                awaitEachGesture {
-                    awaitFirstDown()
-                    isPressed = true; onInput(1)
-                    waitForUpOrCancellation()
-                    isPressed = false; onInput(0)
-                }
-            }
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+    )
+}
+
+@Composable
+fun DiagonalDot(modifier: Modifier, isPressed: Boolean) {
+    Box(
+        modifier = modifier
+            .size(12.dp)
+            .clip(CircleShape)
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.40f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
     )
 }
 
@@ -138,8 +210,8 @@ fun ActionCircle(label: String, modifier: Modifier, accent: Color, onInput: (Int
         modifier = modifier
             .size(55.dp)
             .clip(CircleShape)
-            .background(if (isPressed) accent.copy(alpha = 0.45f) else Color.White.copy(alpha = 0.05f))
-            .border(1.5.dp, if (isPressed) accent else Color.White.copy(alpha = 0.25f), CircleShape)
+            .background(if (isPressed) accent.copy(alpha = 0.45f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+            .border(1.5.dp, if (isPressed) accent else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -150,7 +222,7 @@ fun ActionCircle(label: String, modifier: Modifier, accent: Color, onInput: (Int
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = if (isPressed) Color.White else Color.White.copy(alpha = 0.6f), fontSize = 18.sp, fontWeight = FontWeight.Black)
+        Text(label, color = if (isPressed) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontSize = 18.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -161,8 +233,8 @@ fun CircleControlButton(label: String, onToggle: (Boolean) -> Unit) {
         modifier = Modifier
             .size(54.dp)
             .clip(CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
-            .background(if (isPressed) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f), CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -173,7 +245,7 @@ fun CircleControlButton(label: String, onToggle: (Boolean) -> Unit) {
             },
         contentAlignment = Alignment.Center
     ) {
-        Text(label, color = Color.LightGray, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
@@ -184,8 +256,8 @@ fun IconPillButton(icon: ImageVector, onToggle: (Boolean) -> Unit) {
         modifier = Modifier
             .size(44.dp)
             .clip(CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.15f), CircleShape)
-            .background(if (isPressed) Color.White.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.08f), CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f), CircleShape)
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), CircleShape)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     awaitFirstDown()
@@ -196,6 +268,6 @@ fun IconPillButton(icon: ImageVector, onToggle: (Boolean) -> Unit) {
             },
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, null, tint = Color.LightGray, modifier = Modifier.size(18.dp))
+        Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
 }
