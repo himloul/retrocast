@@ -57,19 +57,22 @@ class StreamingManager(private val context: Context) {
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
         configureBitrate()
+        videoSource?.adaptOutputFormat(240, 160, 60)
 
         audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
     }
 
     private fun configureBitrate() {
-        peerConnection?.getSenders()?.forEach { sender ->
-            if (sender.track()?.kind() == "video") {
+        peerConnection?.transceivers?.forEach { transceiver ->
+            if (transceiver.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
+                val sender = transceiver.sender
                 try {
                     val params = sender.parameters
                     params.encodings?.forEach { encoding ->
-                        encoding.maxBitrateBps = 4000000
-                        encoding.minBitrateBps = 512000
+                        encoding.maxBitrateBps = 5000000
+                        encoding.minBitrateBps = 1000000
                         encoding.maxFramerate = 60
+                        encoding.scaleResolutionDownBy = 1.0
                     }
                     sender.parameters = params
                 } catch (e: Exception) {
