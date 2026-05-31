@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -177,10 +178,13 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         ThumbnailManager.init(this)
         refreshRomLibrary()
         setContent {
+            val darkTheme = isSystemInDarkTheme()
             val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                dynamicDarkColorScheme(this)
-            } else {
+                if (darkTheme) dynamicDarkColorScheme(this) else dynamicLightColorScheme(this)
+            } else if (darkTheme) {
                 darkColorScheme(primary = Color(0xFFD0BCFF), background = Color.Black, surface = Color(0xFF1C1B1F))
+            } else {
+                lightColorScheme(primary = Color(0xFF7A4A2A), background = Color(0xFFF5F0E8), surface = Color(0xFFEDE7DC))
             }
             val configuration = LocalConfiguration.current
             val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -208,7 +212,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                         }
                     }
                 ) {
-                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                         if (isLandscape) {
                             WideHandheldLayout(
                                 nativeRetro = nativeRetro,
@@ -275,12 +279,12 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (loadedRomPath != null) {
-                    IconButton(onClick = onOpenMenu) { Icon(Icons.Default.Settings, "Menu", tint = Color.LightGray) }
+                    IconButton(onClick = onOpenMenu) { Icon(Icons.Default.Settings, "Menu", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                 } else {
-                    IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = Color.LightGray) }
+                    IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 IconButton(onClick = onCastClick) {
-                    Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.LightGray)
+                    Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (loadedRomPath != null) {
@@ -288,17 +292,20 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     Box(modifier = Modifier.weight(0.45f).fillMaxWidth()) {
                         CastDashboard(castUrl = castUrl)
                     }
+                    Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
+                        TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+                    }
                 } else {
-                    Box(modifier = Modifier.weight(0.45f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         if (!isNativeDisplayConnected) {
-                            AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
+                            AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxWidth().aspectRatio(1.5f))
                         } else {
-                            Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                            Icon(Icons.Default.Tv, "Casting", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
                         }
                     }
-                }
-                Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
-                    TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
+                    }
                 }
             } else {
                 GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, modifier = Modifier.weight(1f).fillMaxWidth())
@@ -328,7 +335,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                         if (!isNativeDisplayConnected) {
                             AndroidView(factory = { ctx -> EmulatorView(ctx).also { emulatorView = it } }, modifier = Modifier.fillMaxHeight().aspectRatio(1.5f))
                         } else {
-                            Icon(Icons.Default.Tv, "Casting", tint = Color.DarkGray, modifier = Modifier.size(64.dp))
+                            Icon(Icons.Default.Tv, "Casting", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(64.dp))
                         }
                     }
                 }
@@ -628,11 +635,11 @@ fun CastDashboard(castUrl: String) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(castUrl, style = MaterialTheme.typography.titleMedium, color = Color(0xFFD0BCFF), fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text(castUrl, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             IconButton(onClick = {
                 val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
-            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = Color.Gray, modifier = Modifier.size(18.dp)) }
+            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
         }
         Spacer(modifier = Modifier.height(16.dp))
         QrCodeView(url = castUrl, modifier = Modifier.size(150.dp))
@@ -644,14 +651,14 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
     if (romFiles.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Gamepad, "No games", tint = Color.DarkGray, modifier = Modifier.size(48.dp))
+                Icon(Icons.Default.Gamepad, "No games", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(48.dp))
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("Tap folder to load a ROM", color = Color.Gray, style = MaterialTheme.typography.bodyLarge)
+                Text("Tap folder to load a ROM", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
             }
         }
     } else {
         Column(modifier = modifier) {
-            Text("Games", color = Color.Gray, style = MaterialTheme.typography.titleSmall,
+            Text("Games", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp))
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 12.dp),
@@ -719,13 +726,14 @@ fun QrCodeView(url: String, modifier: Modifier = Modifier) {
         }
     }
     if (matrix == null) return
+    val qrColor = MaterialTheme.colorScheme.onBackground
     Canvas(modifier = modifier) {
         val cellSize = minOf(size.width, size.height) / matrix.width
         for (y in 0 until matrix.height) {
             for (x in 0 until matrix.width) {
                 if (matrix[x, y]) {
                     drawRect(
-                        color = Color.White,
+                        color = qrColor,
                         topLeft = Offset(x * cellSize, y * cellSize),
                         size = Size(cellSize, cellSize)
                     )
