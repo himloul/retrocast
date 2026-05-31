@@ -52,4 +52,10 @@ class NativeRetro {
     external fun setPaths(systemPath: String, savePath: String)
 
     external fun saveSram()
+
+    external fun getStateSize(): Int
+
+    external fun saveState(path: String): Boolean
+
+    external fun loadState(path: String): Boolean
 }

@@ -500,11 +500,18 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     private fun saveGame() {
-        if (isCoreReady) nativeRetro.saveSram()
+        if (isCoreReady && loadedRomPath != null) {
+            nativeRetro.saveState(loadedRomPath + ".state")
+        }
     }
 
     private fun loadSramFromDisk() {
-        resetGame()
+        if (isCoreReady && loadedRomPath != null) {
+            val statePath = loadedRomPath + ".state"
+            if (!nativeRetro.loadState(statePath)) {
+                resetGame()
+            }
+        }
     }
 
     private fun resetGame() {

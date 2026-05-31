@@ -12,6 +12,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <sys/stat.h>
 
 #include <oboe/Oboe.h>
 
@@ -60,6 +61,12 @@ struct ZenithEngine {
     typedef size_t (*get_mem_size_t)(unsigned id);
     get_mem_data_t get_mem_data = nullptr;
     get_mem_size_t get_mem_size = nullptr;
+    typedef size_t (*state_size_fn)();
+    typedef bool (*serialize_fn)(void*, size_t);
+    typedef bool (*unserialize_fn)(const void*, size_t);
+    state_size_fn state_size = nullptr;
+    serialize_fn state_serialize = nullptr;
+    unserialize_fn state_unserialize = nullptr;
     JavaVM* jvm = nullptr;
     jobject callback_obj = nullptr;
     jobject argb_buf = nullptr;
@@ -233,6 +240,10 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env,
     ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
     g_engine.get_mem_data = (decltype(g_engine.get_mem_data))dlsym(g_engine.core_handle, "retro_get_memory_data");
     g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
+    g_engine.state_size = (decltype(g_engine.state_size))dlsym(g_engine.core_handle, "retro_serialize_size");
+    g_engine.state_serialize = (decltype(g_engine.state_serialize))dlsym(g_engine.core_handle, "retro_serialize");
+    g_engine.state_unserialize = (decltype(g_engine.state_unserialize))dlsym(g_engine.core_handle, "retro_unserialize");
+    LOGI("init: state_size=%p serialize=%p unserialize=%p", g_engine.state_size, g_engine.state_serialize, g_engine.state_unserialize);
     LOGI("init: done (retro_init deferred to loadGame)");
 }
 
@@ -240,13 +251,57 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* 
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
     if (!g_engine.get_mem_data || g_engine.rom_path.empty()) { LOGE("saveSram: no mem_data or rom_path empty"); return; }
+    std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
     void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); size_t s = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
     if (d && s > 0) {
         std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+        mkdir(g_engine.save_dir.c_str(), 0777);
         std::ofstream f(p, std::ios::binary);
         if (f.is_open()) { f.write((const char*)d, s); f.close(); LOGI("saveSram: wrote %zu bytes to %s", s, p.c_str()); }
         else { LOGE("saveSram: failed to open %s for writing", p.c_str()); }
     } else { LOGE("saveSram: mem_data=%p size=%zu", d, s); }
+}
+
+JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getStateSize(JNIEnv*, jobject) {
+    if (!g_engine.state_size) return 0;
+    return (jint)g_engine.state_size();
+}
+
+JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_saveState(JNIEnv* env, jobject, jstring path) {
+    LOGI("saveState called");
+    if (!g_engine.state_serialize || !g_engine.state_size) return JNI_FALSE;
+    size_t sz = g_engine.state_size();
+    std::vector<uint8_t> buf(sz);
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
+        if (!g_engine.state_serialize(buf.data(), sz)) { LOGE("saveState: serialize failed"); return JNI_FALSE; }
+    }
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    std::ofstream f(p, std::ios::binary);
+    bool ok = f.is_open();
+    if (ok) { f.write((const char*)buf.data(), sz); f.close(); LOGI("saveState: wrote %zu bytes to %s", sz, p); }
+    else { LOGE("saveState: failed to open %s", p); }
+    env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadState(JNIEnv* env, jobject, jstring path) {
+    LOGI("loadState called");
+    if (!g_engine.state_unserialize) return JNI_FALSE;
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    std::ifstream f(p, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) { LOGE("loadState: no file at %s", p); env->ReleaseStringUTFChars(path, p); return JNI_FALSE; }
+    size_t sz = f.tellg(); f.seekg(0);
+    std::vector<uint8_t> buf(sz);
+    f.read((char*)buf.data(), sz); f.close();
+    bool ok;
+    {
+        std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
+        ok = g_engine.state_unserialize(buf.data(), sz);
+    }
+    LOGI("loadState: read %zu bytes from %s -> %d", sz, p, ok);
+    env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
@@ -274,6 +329,7 @@ JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIE
         std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
         std::ifstream f(sp, std::ios::binary);
         if (f.is_open()) {
+            std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
             void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM);
             size_t sz = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
             if (d) { f.read((char*)d, sz); LOGI("loadGame: read save %zu bytes from %s", f.gcount(), sp.c_str()); }
