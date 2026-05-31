@@ -239,9 +239,14 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env,
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
-    if (!g_engine.get_mem_data || g_engine.rom_path.empty()) return;
+    if (!g_engine.get_mem_data || g_engine.rom_path.empty()) { LOGE("saveSram: no mem_data or rom_path empty"); return; }
     void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); size_t s = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
-    if (d && s > 0) { std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav"; std::ofstream f(p, std::ios::binary); if (f.is_open()) { f.write((const char*)d, s); f.close(); } }
+    if (d && s > 0) {
+        std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+        std::ofstream f(p, std::ios::binary);
+        if (f.is_open()) { f.write((const char*)d, s); f.close(); LOGI("saveSram: wrote %zu bytes to %s", s, p.c_str()); }
+        else { LOGE("saveSram: failed to open %s for writing", p.c_str()); }
+    } else { LOGE("saveSram: mem_data=%p size=%zu", d, s); }
 }
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
@@ -268,7 +273,13 @@ JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIE
         setupOboeStream((int32_t)g_engine.av_sample_rate);
         std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
         std::ifstream f(sp, std::ios::binary);
-        if (f.is_open()) { void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); if (d) f.read((char*)d, g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM)); f.close(); }
+        if (f.is_open()) {
+            void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM);
+            size_t sz = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
+            if (d) { f.read((char*)d, sz); LOGI("loadGame: read save %zu bytes from %s", f.gcount(), sp.c_str()); }
+            else { LOGE("loadGame: get_mem_data returned null"); }
+            f.close();
+        } else { LOGI("loadGame: no save file at %s", sp.c_str()); }
     }
     env->ReleaseStringUTFChars(path, p); g_engine.core_run = (retro_run_t)dlsym(g_engine.core_handle, "retro_run"); LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
 }
