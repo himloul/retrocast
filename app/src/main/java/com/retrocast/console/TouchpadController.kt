@@ -157,7 +157,7 @@ fun TouchpadController(
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 128.dp else 168.dp),
+                .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 80.dp else 120.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNarrow) 16.dp else 24.dp)
         ) {
             IconPillButton(Icons.Default.HorizontalRule) { pressed ->
