@@ -33,8 +33,8 @@ fun TouchpadController(
         val isNarrow = maxWidth < 360.dp
         val dpadSize = if (isLandscape) 140.dp else if (isNarrow) 120.dp else 150.dp
         val sidePad = if (isLandscape) 32.dp else if (isNarrow) 4.dp else 8.dp
-        val bottomPad = if (isLandscape) 0.dp else if (isNarrow) 16.dp else 24.dp
-        val clusterSpacing = if (isNarrow) 8.dp else 16.dp
+        val bottomPad = if (isLandscape) 0.dp else if (isNarrow) 140.dp else 180.dp
+        val clusterSpacing = if (isNarrow) 36.dp else 52.dp
 
         // --- LEFT CLUSTER (L + DPAD) ---
         Column(
@@ -88,7 +88,7 @@ fun TouchpadController(
                                 if (buttons == lastButtons) return
                                 (lastButtons - buttons).forEach { nativeRetro.setButton(it, false) }
                                 (buttons - lastButtons).forEach { nativeRetro.setButton(it, true) }
-                                if (buttons.isNotEmpty() && lastButtons.isNotEmpty()) {
+                                if (buttons.isNotEmpty()) {
                                     haptic.triggerTick()
                                 }
                                 lastButtons = buttons
@@ -142,7 +142,7 @@ fun TouchpadController(
 
             GamepadBase(modifier = Modifier.size(dpadSize)) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
-                    val off = minOf(maxWidth, maxHeight) / 2 * 0.45f
+                    val off = minOf(maxWidth, maxHeight) / 2 * 0.35f
                     ActionCircle("A", Modifier.align(Alignment.Center).offset(x = off, y = -off), MaterialTheme.colorScheme.tertiary) { 
                         nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
                     }
@@ -157,7 +157,7 @@ fun TouchpadController(
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 8.dp else 16.dp),
+                .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 128.dp else 168.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNarrow) 16.dp else 24.dp)
         ) {
             IconPillButton(Icons.Default.HorizontalRule) { pressed ->
