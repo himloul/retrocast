@@ -233,8 +233,7 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env,
     ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
     g_engine.get_mem_data = (decltype(g_engine.get_mem_data))dlsym(g_engine.core_handle, "retro_get_memory_data");
     g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
-    ((retro_init_t)dlsym(g_engine.core_handle, "retro_init"))();
-    LOGI("init: done (Oboe deferred to loadGame)");
+    LOGI("init: done (retro_init deferred to loadGame)");
 }
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
@@ -247,6 +246,13 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_saveSram(JNIEnv*,
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
     LOGI("loadGame called");
+    ((retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment"))(env_cb);
+    ((retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh"))(video_refresh_cb);
+    ((retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch"))(audio_batch_cb);
+    ((retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state"))(input_state_cb);
+    ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
+    auto retro_init_fn = (void (*)())dlsym(g_engine.core_handle, "retro_init");
+    if (retro_init_fn) retro_init_fn();
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;
     struct retro_game_info info = { p, nullptr, 0, nullptr }; bool ok = ((bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game"))(&info);
     LOGI("loadGame: retro_load_game returned %d", ok);
@@ -295,6 +301,8 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_unloadGame(JNIEnv
     if (g_engine.core_handle) {
         auto retro_unload_game = (void (*)())dlsym(g_engine.core_handle, "retro_unload_game");
         if (retro_unload_game) retro_unload_game();
+        auto retro_deinit_fn = (void (*)())dlsym(g_engine.core_handle, "retro_deinit");
+        if (retro_deinit_fn) retro_deinit_fn();
     }
     g_engine.core_run = nullptr;
     g_engine.rom_path = "";

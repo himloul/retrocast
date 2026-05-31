@@ -184,42 +184,67 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             }
             val configuration = LocalConfiguration.current
             val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val drawerState = rememberDrawerState(DrawerValue.Closed)
+            val scope = rememberCoroutineScope()
+            LaunchedEffect(loadedRomPath) {
+                if (loadedRomPath != null) drawerState.snapTo(DrawerValue.Closed)
+            }
 
             MaterialTheme(colorScheme = colorScheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    if (isLandscape) {
-                        WideHandheldLayout(
-                            nativeRetro = nativeRetro,
-                            hapticManager = hapticManager,
-                            isCasting = isCasting,
-                            castUrl = castUrl,
-                            onCastClick = { toggleCasting() },
-                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
-                            romFiles = romFiles,
-                            onRomSelected = { file -> loadLocalRom(file) },
-                            loadedRomPath = loadedRomPath
-                        )
-                    } else {
-                        PortraitHandheldLayout(
-                            nativeRetro = nativeRetro,
-                            hapticManager = hapticManager,
-                            isCasting = isCasting,
-                            castUrl = castUrl,
-                            isNativeDisplayConnected = isNativeDisplayConnected,
-                            onCastClick = { toggleCasting() },
-                            onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
-                            romFiles = romFiles,
-                            onRomSelected = { file -> loadLocalRom(file) },
-                            loadedRomPath = loadedRomPath
-                        )
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    gesturesEnabled = loadedRomPath != null,
+                    drawerContent = {
+                        if (loadedRomPath != null) {
+                            ModalDrawerSheet {
+                                Spacer(modifier = Modifier.height(24.dp))
+                                Text("Menu", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
+                                NavigationDrawerItem(icon = { Icon(Icons.Default.Save, null) }, label = { Text("Save") }, selected = false, onClick = { saveGame(); scope.launch { drawerState.close() } })
+                                NavigationDrawerItem(icon = { Icon(Icons.Default.FolderOpen, null) }, label = { Text("Load") }, selected = false, onClick = { loadSramFromDisk(); scope.launch { drawerState.close() } })
+                                NavigationDrawerItem(icon = { Icon(Icons.Default.Refresh, null) }, label = { Text("Reset") }, selected = false, onClick = { resetGame(); scope.launch { drawerState.close() } })
+                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                                NavigationDrawerItem(icon = { Icon(Icons.Default.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { quitGame(); scope.launch { drawerState.close() } })
+                            }
+                        }
                     }
+                ) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                        if (isLandscape) {
+                            WideHandheldLayout(
+                                nativeRetro = nativeRetro,
+                                hapticManager = hapticManager,
+                                isCasting = isCasting,
+                                castUrl = castUrl,
+                                onCastClick = { toggleCasting() },
+                                onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
+                                onOpenMenu = { scope.launch { drawerState.open() } },
+                                romFiles = romFiles,
+                                onRomSelected = { file -> loadLocalRom(file) },
+                                loadedRomPath = loadedRomPath
+                            )
+                        } else {
+                            PortraitHandheldLayout(
+                                nativeRetro = nativeRetro,
+                                hapticManager = hapticManager,
+                                isCasting = isCasting,
+                                castUrl = castUrl,
+                                isNativeDisplayConnected = isNativeDisplayConnected,
+                                onCastClick = { toggleCasting() },
+                                onLoadRom = { romPickerLauncher.launch(arrayOf("application/octet-stream", "application/zip")) },
+                                onOpenMenu = { scope.launch { drawerState.open() } },
+                                romFiles = romFiles,
+                                onRomSelected = { file -> loadLocalRom(file) },
+                                loadedRomPath = loadedRomPath
+                            )
+                        }
 
-                    if (isDownloading) {
-                        Dialog(onDismissRequest = {}) {
-                            Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator(); Spacer(modifier = Modifier.height(16.dp))
-                                    Text("Downloading Engine...", style = MaterialTheme.typography.titleMedium)
+                        if (isDownloading) {
+                            Dialog(onDismissRequest = {}) {
+                                Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                                    Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        CircularProgressIndicator(); Spacer(modifier = Modifier.height(16.dp))
+                                        Text("Downloading Engine...", style = MaterialTheme.typography.titleMedium)
+                                    }
                                 }
                             }
                         }
@@ -238,6 +263,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         isNativeDisplayConnected: Boolean,
         onCastClick: () -> Unit,
         onLoadRom: () -> Unit,
+        onOpenMenu: () -> Unit,
         romFiles: List<File>,
         onRomSelected: (File) -> Unit,
         loadedRomPath: String?
@@ -248,7 +274,11 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = Color.LightGray) }
+                if (loadedRomPath != null) {
+                    IconButton(onClick = onOpenMenu) { Icon(Icons.Default.Settings, "Menu", tint = Color.LightGray) }
+                } else {
+                    IconButton(onClick = onLoadRom) { Icon(Icons.Default.FolderOpen, "Load", tint = Color.LightGray) }
+                }
                 IconButton(onClick = onCastClick) {
                     Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.LightGray)
                 }
@@ -284,6 +314,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         castUrl: String,
         onCastClick: () -> Unit,
         onLoadRom: () -> Unit,
+        onOpenMenu: () -> Unit,
         romFiles: List<File>,
         onRomSelected: (File) -> Unit,
         loadedRomPath: String?
@@ -309,8 +340,14 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 modifier = Modifier.fillMaxWidth().padding(8.dp).align(Alignment.TopCenter),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = onLoadRom, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
-                    Icon(Icons.Default.FolderOpen, "Load", tint = Color.White)
+                if (loadedRomPath != null) {
+                    IconButton(onClick = onOpenMenu, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
+                        Icon(Icons.Default.Settings, "Menu", tint = Color.White)
+                    }
+                } else {
+                    IconButton(onClick = onLoadRom, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
+                        Icon(Icons.Default.FolderOpen, "Load", tint = Color.White)
+                    }
                 }
                 IconButton(onClick = onCastClick, modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)) {
                     Icon(if (isCasting) Icons.Default.CastConnected else Icons.Default.Cast, "Cast", tint = if (isCasting) MaterialTheme.colorScheme.primary else Color.White)
@@ -453,6 +490,40 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             android.util.Log.e("MainActivity", "Failed to extract ROM from ZIP", e)
         }
         return null
+    }
+
+    private fun saveGame() {
+        if (isCoreReady) nativeRetro.saveSram()
+    }
+
+    private fun loadSramFromDisk() {
+        resetGame()
+    }
+
+    private fun resetGame() {
+        if (isCoreReady) {
+            val rom = loadedRomPath ?: return
+            nativeRetro.stop()
+            nativeRetro.saveSram()
+            nativeRetro.unloadGame()
+            isCoreReady = false
+            loadedRomPath = null
+            if (nativeRetro.loadGame(rom)) {
+                loadedRomPath = rom
+                isCoreReady = true
+                nativeRetro.start()
+            }
+        }
+    }
+
+    private fun quitGame() {
+        if (isCoreReady) {
+            nativeRetro.stop()
+            nativeRetro.saveSram()
+            nativeRetro.unloadGame()
+            isCoreReady = false
+            loadedRomPath = null
+        }
     }
 
     private fun toggleCasting() {
