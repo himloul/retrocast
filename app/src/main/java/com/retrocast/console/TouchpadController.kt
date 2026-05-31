@@ -113,18 +113,16 @@ fun TouchpadController(
             ) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val r = minOf(maxWidth, maxHeight) / 2
-                    val diagR = r - 22.dp
-                    val diagComp = diagR * 0.707f
-                    val off = r - diagComp - 6.dp
+                    val mainOff = r * 0.55f
 
-                    DPadCircle(Modifier.align(Alignment.TopCenter).offset(y = 3.dp), isPressed = 4 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.BottomCenter).offset(y = (-3).dp), isPressed = 5 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.CenterStart).offset(x = 3.dp), isPressed = 6 in pressedButtons)
-                    DPadCircle(Modifier.align(Alignment.CenterEnd).offset(x = (-3).dp), isPressed = 7 in pressedButtons)
-                    DiagonalDot(Modifier.align(Alignment.TopStart).offset(x = off, y = off), isPressed = 4 in pressedButtons && 6 in pressedButtons)
-                    DiagonalDot(Modifier.align(Alignment.TopEnd).offset(x = -off, y = off), isPressed = 4 in pressedButtons && 7 in pressedButtons)
-                    DiagonalDot(Modifier.align(Alignment.BottomStart).offset(x = off, y = -off), isPressed = 5 in pressedButtons && 6 in pressedButtons)
-                    DiagonalDot(Modifier.align(Alignment.BottomEnd).offset(x = -off, y = -off), isPressed = 5 in pressedButtons && 7 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.Center).offset(y = -mainOff), isPressed = 4 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.Center).offset(y = mainOff), isPressed = 5 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.Center).offset(x = -mainOff), isPressed = 6 in pressedButtons)
+                    DPadCircle(Modifier.align(Alignment.Center).offset(x = mainOff), isPressed = 7 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.Center).offset(x = -mainOff * 0.7f, y = -mainOff * 0.7f), isPressed = 4 in pressedButtons && 6 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.Center).offset(x = mainOff * 0.7f, y = -mainOff * 0.7f), isPressed = 4 in pressedButtons && 7 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.Center).offset(x = -mainOff * 0.7f, y = mainOff * 0.7f), isPressed = 5 in pressedButtons && 6 in pressedButtons)
+                    DiagonalDot(Modifier.align(Alignment.Center).offset(x = mainOff * 0.7f, y = mainOff * 0.7f), isPressed = 5 in pressedButtons && 7 in pressedButtons)
                 }
             }
         }
@@ -143,11 +141,14 @@ fun TouchpadController(
             }
 
             GamepadBase(modifier = Modifier.size(dpadSize)) {
-                ActionCircle("A", Modifier.align(Alignment.Center).offset(x = 22.dp, y = (-22).dp), MaterialTheme.colorScheme.tertiary) { 
-                    nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
-                }
-                ActionCircle("B", Modifier.align(Alignment.Center).offset(x = (-22).dp, y = 22.dp), MaterialTheme.colorScheme.secondary) { 
-                    nativeRetro.setButton(0, it > 0); if (it > 0) hapticManager.triggerClick() 
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val off = minOf(maxWidth, maxHeight) / 2 * 0.45f
+                    ActionCircle("A", Modifier.align(Alignment.Center).offset(x = off, y = -off), MaterialTheme.colorScheme.tertiary) { 
+                        nativeRetro.setButton(8, it > 0); if (it > 0) hapticManager.triggerClick() 
+                    }
+                    ActionCircle("B", Modifier.align(Alignment.Center).offset(x = -off, y = off), MaterialTheme.colorScheme.secondary) { 
+                        nativeRetro.setButton(0, it > 0); if (it > 0) hapticManager.triggerClick() 
+                    }
                 }
             }
         }
@@ -197,7 +198,7 @@ fun DiagonalDot(modifier: Modifier, isPressed: Boolean) {
         modifier = modifier
             .size(12.dp)
             .clip(CircleShape)
-            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.50f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
+            .background(if (isPressed) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
     )
 }
 
