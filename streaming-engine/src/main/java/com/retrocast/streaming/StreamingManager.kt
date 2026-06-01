@@ -13,6 +13,23 @@ class StreamingManager(private val context: Context) {
         private const val MIN_BITRATE_BPS = 1_000_000
         private const val MAX_FRAMERATE = 60
         private const val MAX_AUDIO_BYTES = 16384
+
+        private val initLock = Any()
+        private var initialized = false
+
+        private fun ensureInitialized(context: Context) {
+            if (!initialized) {
+                synchronized(initLock) {
+                    if (!initialized) {
+                        PeerConnectionFactory.initialize(
+                            PeerConnectionFactory.InitializationOptions.builder(context)
+                                .createInitializationOptions()
+                        )
+                        initialized = true
+                    }
+                }
+            }
+        }
     }
 
     private val rootEglBase: EglBase = EglBase.create()
@@ -25,9 +42,7 @@ class StreamingManager(private val context: Context) {
     private var audioDataChannel: DataChannel? = null
 
     init {
-        val options = PeerConnectionFactory.InitializationOptions.builder(context)
-            .createInitializationOptions()
-        PeerConnectionFactory.initialize(options)
+        ensureInitialized(context)
 
         audioDeviceModule = JavaAudioDeviceModule.builder(context)
             .setUseHardwareAcousticEchoCanceler(false)
