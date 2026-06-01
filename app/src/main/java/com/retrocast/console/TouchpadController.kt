@@ -160,7 +160,7 @@ fun TouchpadController(
                 .padding(bottom = if (isLandscape) 16.dp else if (isNarrow) 80.dp else 120.dp),
             horizontalArrangement = Arrangement.spacedBy(if (isNarrow) 16.dp else 24.dp)
         ) {
-            IconPillButton(Icons.Default.HorizontalRule) { pressed ->
+            IconPillButton(Icons.Default.Remove) { pressed ->
                 nativeRetro.setButton(2, pressed)
                 if (pressed) hapticManager.triggerTick()
             }

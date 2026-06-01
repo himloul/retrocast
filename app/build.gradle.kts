@@ -47,7 +47,6 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "META-INF/INDEX.LIST"
-            excludes += "META-INF/io.netty.versions.properties"
         }
     }
 }
@@ -67,13 +66,9 @@ dependencies {
 
     // Ktor for discovery and signaling
     implementation("io.ktor:ktor-server-core:2.3.12")
-    implementation("io.ktor:ktor-server-netty:2.3.12")
+    implementation("io.ktor:ktor-server-cio:2.3.12")
     implementation("io.ktor:ktor-server-websockets:2.3.12")
     implementation("io.ktor:ktor-server-html-builder:2.3.12")
-
-    // Ktor Client for downloading cores
-    implementation("io.ktor:ktor-client-core:2.3.12")
-    implementation("io.ktor:ktor-client-okhttp:2.3.12")
 
     // WebRTC for streaming
     implementation("com.github.webrtc-sdk:android:104.5112.01")

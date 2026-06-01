@@ -13,6 +13,9 @@
 #include <fstream>
 #include <sys/stat.h>
 #include <algorithm>
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
 
 #include <oboe/Oboe.h>
 
@@ -150,24 +153,32 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
     const uint8_t* raw = g_engine.raw_frame_buf.data();
 
     for (unsigned y = 0; y < h; y++) {
-        for (unsigned x = 0; x < w; x++) {
-            uint32_t color;
-            if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-                uint32_t pix = ((const uint32_t*)raw)[y * (pitch / 4) + x];
-                uint8_t r = pix & 0xFF, g = (pix >> 8) & 0xFF, b = (pix >> 16) & 0xFF;
-                color = 0xFF000000 | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
-            } else {
-                uint16_t pix = ((const uint16_t*)raw)[y * (pitch / 2) + x];
+        if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+            const uint32_t* src = (const uint32_t*)(raw + y * pitch);
+            uint32_t* dst = (uint32_t*)(argb + y * w * 4);
+            unsigned x = 0;
+#if defined(__ARM_NEON)
+            uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+            for (; x + 4 <= w; x += 4) {
+                vst1q_u32(dst + x, vorrq_u32(vld1q_u32(src + x), alpha));
+            }
+#endif
+            for (; x < w; x++) {
+                dst[x] = src[x] | 0xFF000000;
+            }
+        } else {
+            const uint16_t* src = (const uint16_t*)(raw + y * pitch);
+            uint32_t* dst = (uint32_t*)(argb + y * w * 4);
+            for (unsigned x = 0; x < w; x++) {
+                uint16_t pix = src[x];
                 uint8_t R = (pix >> 11) & 0x1F;
                 uint8_t G = (pix >> 5) & 0x3F;
                 uint8_t B = pix & 0x1F;
                 R = (R << 3) | (R >> 2);
                 G = (G << 2) | (G >> 4);
                 B = (B << 3) | (B >> 2);
-                color = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
+                dst[x] = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
             }
-            *(uint32_t*)argb = color;
-            argb += 4;
         }
     }
 
@@ -405,6 +416,8 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_start(JNIEnv*, jo
             auto now = std::chrono::steady_clock::now();
             if (now < next_frame) {
                 std::this_thread::sleep_for(next_frame - now);
+            } else if (now - next_frame > frame_duration) {
+                next_frame = now;
             }
         }
     });

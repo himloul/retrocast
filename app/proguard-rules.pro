@@ -1,9 +1,3 @@
 -keep class org.webrtc.** { *; }
 -keep class com.retrocast.emulator.NativeRetro { *; }
--dontwarn io.netty.internal.tcnative.**
--dontwarn org.apache.log4j.**
--dontwarn org.apache.logging.log4j.**
--dontwarn org.eclipse.jetty.npn.**
 -dontwarn org.slf4j.impl.**
--dontwarn reactor.blockhound.**
--dontwarn java.lang.management.**

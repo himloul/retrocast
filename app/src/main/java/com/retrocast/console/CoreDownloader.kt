@@ -1,22 +1,16 @@
 package com.retrocast.console
 
 import android.os.Build
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
 
 object CoreDownloader {
-    private val client = HttpClient(OkHttp)
     private const val BASE_URL = "https://buildbot.libretro.com/nightly/android/latest"
 
-    /**
-     * Detect the device architecture for Libretro buildbot.
-     */
     private fun getArchitecture(): String {
         val abi = Build.SUPPORTED_ABIS[0]
         return when {
@@ -24,29 +18,32 @@ object CoreDownloader {
             abi.contains("armeabi") -> "armeabi-v7a"
             abi.contains("x86_64") -> "x86_64"
             abi.contains("x86") -> "x86"
-            else -> "arm64-v8a" // Default to arm64
+            else -> "arm64-v8a"
         }
     }
 
-    /**
-     * Download a core from Libretro buildbot.
-     * Example: mgba_libretro_android.so
-     */
     suspend fun downloadCore(coreName: String, destinationDir: File): Boolean = withContext(Dispatchers.IO) {
         val arch = getArchitecture()
-        // Buildbot usually provides cores unzipped or as .so.zip
-        // We'll try the .so directly first
         val url = "$BASE_URL/$arch/$coreName.zip"
         val tempZip = File(destinationDir, "$coreName.zip")
 
         try {
-            val response: HttpResponse = client.get(url)
-            if (response.status.value !in 200..299) {
+            val connection = URL(url).openConnection() as HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.instanceFollowRedirects = true
+
+            if (connection.responseCode !in 200..299) {
+                connection.disconnect()
                 return@withContext false
             }
 
-            val body = response.readBytes()
-            FileOutputStream(tempZip).use { it.write(body) }
+            connection.inputStream.use { input ->
+                FileOutputStream(tempZip).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            connection.disconnect()
 
             java.util.zip.ZipInputStream(tempZip.inputStream()).use { zis ->
                 var entry = zis.nextEntry

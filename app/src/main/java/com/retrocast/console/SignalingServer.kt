@@ -5,8 +5,9 @@ import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
 import io.ktor.server.application.*
-import io.ktor.server.engine.*
-import io.ktor.server.netty.*
+import io.ktor.server.engine.ApplicationEngine
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.cio.CIO
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.server.html.*
@@ -16,7 +17,7 @@ import kotlinx.html.*
 import java.time.Duration
 
 class SignalingServer(private val context: Context, private val port: Int) {
-    private var server: NettyApplicationEngine? = null
+    private var server: ApplicationEngine? = null
     @Volatile
     private var currentSession: WebSocketServerSession? = null
     private var nsdManager: NsdManager? = null
@@ -24,7 +25,7 @@ class SignalingServer(private val context: Context, private val port: Int) {
     private val tag = "SignalingServer"
 
     fun start(onClientConnected: () -> Unit, onSdpReceived: (String) -> Unit) {
-        server = embeddedServer(Netty, port = port) {
+        server = embeddedServer(CIO, port = port) {
             install(WebSockets) {
                 pingPeriod = Duration.ofSeconds(15)
                 timeout = Duration.ofSeconds(15)

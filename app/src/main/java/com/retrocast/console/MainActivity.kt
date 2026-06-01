@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -208,7 +209,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.FolderOpen, null) }, label = { Text("Load") }, selected = false, onClick = { loadSramFromDisk(); scope.launch { drawerState.close() } })
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.Refresh, null) }, label = { Text("Reset") }, selected = false, onClick = { resetGame(); scope.launch { drawerState.close() } })
                                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                                NavigationDrawerItem(icon = { Icon(Icons.Default.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { quitGame(); scope.launch { drawerState.close() } })
+                                NavigationDrawerItem(icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { quitGame(); scope.launch { drawerState.close() } })
                             }
                         }
                     }
