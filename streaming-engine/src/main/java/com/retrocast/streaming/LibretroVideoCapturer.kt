@@ -7,7 +7,7 @@ import org.webrtc.*
  */
 class LibretroVideoCapturer : VideoCapturer {
     companion object {
-        private const val MIN_FRAME_INTERVAL_NS = 16_666_666L
+        private const val MIN_FRAME_INTERVAL_NS = 16_000_000L
     }
 
     private var capturerObserver: CapturerObserver? = null

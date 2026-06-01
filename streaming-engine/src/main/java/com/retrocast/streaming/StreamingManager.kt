@@ -9,8 +9,8 @@ import java.nio.ByteBuffer
 class StreamingManager(private val context: Context) {
     companion object {
         private const val STUN_URL = "stun:stun.l.google.com:19302"
-        private const val MAX_BITRATE_BPS = 5_000_000
-        private const val MIN_BITRATE_BPS = 1_000_000
+        private const val MAX_BITRATE_BPS = 20_000_000
+        private const val MIN_BITRATE_BPS = 5_000_000
         private const val MAX_FRAMERATE = 60
         private const val MAX_AUDIO_BYTES = 16384
 
@@ -53,7 +53,7 @@ class StreamingManager(private val context: Context) {
         peerConnectionFactory = PeerConnectionFactory.builder()
             .setOptions(factoryOptions)
             .setAudioDeviceModule(audioDeviceModule)
-            .setVideoEncoderFactory(createH264EncoderFactory())
+            .setVideoEncoderFactory(createEncoderFactory())
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(rootEglBase.eglBaseContext))
             .createPeerConnectionFactory()
     }
@@ -104,8 +104,8 @@ class StreamingManager(private val context: Context) {
         }
     }
 
-    private fun createH264EncoderFactory(): VideoEncoderFactory =
-        DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
+    private fun createEncoderFactory(): VideoEncoderFactory =
+        PrioritizedVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
 
     fun createOffer(callback: (SessionDescription?) -> Unit) {
         val constraints = MediaConstraints().apply {
@@ -165,5 +165,36 @@ class StreamingManager(private val context: Context) {
         audioDeviceModule?.release()
         peerConnectionFactory?.dispose()
         rootEglBase.release()
+    }
+}
+
+private class PrioritizedVideoEncoderFactory(
+    eglContext: EglBase.Context,
+    enableIntelVp8Encoder: Boolean,
+    enableH264HighProfile: Boolean
+) : VideoEncoderFactory {
+
+    private val hardwareFactory = HardwareVideoEncoderFactory(
+        eglContext, enableIntelVp8Encoder, enableH264HighProfile
+    )
+    private val softwareFactory = SoftwareVideoEncoderFactory()
+
+    override fun createEncoder(info: VideoCodecInfo): VideoEncoder? {
+        return hardwareFactory.createEncoder(info) ?: softwareFactory.createEncoder(info)
+    }
+
+    override fun getSupportedCodecs(): Array<VideoCodecInfo> {
+        val hw = hardwareFactory.supportedCodecs
+        val sw = softwareFactory.supportedCodecs
+        val seen = mutableSetOf<String>()
+        val result = mutableListOf<VideoCodecInfo>()
+        for (name in listOf("VP9", "H264", "VP8")) {
+            for (codec in hw + sw) {
+                if (codec.name == name && seen.add(name)) {
+                    result.add(codec)
+                }
+            }
+        }
+        return result.toTypedArray()
     }
 }

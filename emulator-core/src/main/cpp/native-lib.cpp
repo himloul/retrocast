@@ -70,6 +70,7 @@ struct ZenithEngine {
     std::vector<uint8_t> raw_frame_buf;
     unsigned last_w = 0, last_h = 0;
     size_t last_pitch = 0;
+    const uint8_t* current_frame_data = nullptr;
     JavaVM* jvm = nullptr;
     jobject callback_obj = nullptr;
     jobject argb_buf = nullptr;
@@ -141,14 +142,10 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
     retro_pixel_format fmt = g_engine.pixel_fmt.load();
 
     if (g_engine.is_casting.load()) {
-        size_t raw_size = h * pitch;
-        if (g_engine.raw_frame_buf.size() < raw_size) {
-            g_engine.raw_frame_buf.resize(raw_size);
-        }
-        std::memcpy(g_engine.raw_frame_buf.data(), data, raw_size);
         g_engine.last_w = w;
         g_engine.last_h = h;
         g_engine.last_pitch = pitch;
+        g_engine.current_frame_data = (const uint8_t*)data;
     }
 
     uint8_t* argb = g_engine.argb_ptr;
@@ -189,6 +186,7 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid,
             g_engine.argb_buf, (jint)w, (jint)h);
     }
+    g_engine.current_frame_data = nullptr;
 }
 
 static void sendAudioToJava(const int16_t *d, size_t f) {
@@ -501,13 +499,13 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_fillI420Buffer(
     jobject yBuf, jobject uBuf, jobject vBuf,
     jint width, jint height, jint yStride, jint uvStride)
 {
-    if (g_engine.raw_frame_buf.empty()) return;
+    const uint8_t* frame_data = g_engine.current_frame_data;
+    if (!frame_data) return;
     uint8_t* y_plane = (uint8_t*)env->GetDirectBufferAddress(yBuf);
     uint8_t* u_plane = (uint8_t*)env->GetDirectBufferAddress(uBuf);
     uint8_t* v_plane = (uint8_t*)env->GetDirectBufferAddress(vBuf);
     if (!y_plane || !u_plane || !v_plane) return;
 
-    const uint8_t* data = g_engine.raw_frame_buf.data();
     unsigned fw = g_engine.last_w;
     unsigned fh = g_engine.last_h;
     size_t pitch = g_engine.last_pitch;
@@ -520,12 +518,12 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_fillI420Buffer(
         for (unsigned x = 0; x < conv_w; x++) {
             int r, g, b;
             if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-                uint32_t pix = ((const uint32_t*)data)[y * (pitch / 4) + x];
+                uint32_t pix = ((const uint32_t*)frame_data)[y * (pitch / 4) + x];
                 r = pix & 0xFF;
                 g = (pix >> 8) & 0xFF;
                 b = (pix >> 16) & 0xFF;
             } else {
-                uint16_t pix = ((const uint16_t*)data)[y * (pitch / 2) + x];
+                uint16_t pix = ((const uint16_t*)frame_data)[y * (pitch / 2) + x];
                 r = ((pix >> 11) & 0x1F) << 3;
                 g = ((pix >> 5) & 0x3F) << 2;
                 b = (pix & 0x1F) << 3;
