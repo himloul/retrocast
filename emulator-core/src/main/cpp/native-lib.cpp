@@ -12,6 +12,7 @@
 #include <chrono>
 #include <fstream>
 #include <sys/stat.h>
+#include <algorithm>
 
 #include <oboe/Oboe.h>
 
@@ -62,13 +63,15 @@ struct ZenithEngine {
     state_size_fn state_size = nullptr;
     serialize_fn state_serialize = nullptr;
     unserialize_fn state_unserialize = nullptr;
+    std::atomic<bool> is_casting{false};
+    std::vector<uint8_t> raw_frame_buf;
+    unsigned last_w = 0, last_h = 0;
+    size_t last_pitch = 0;
     JavaVM* jvm = nullptr;
     jobject callback_obj = nullptr;
     jobject argb_buf = nullptr;
-    jobject i420_buf = nullptr;
     jmethodID on_frame_mid = nullptr;
     uint8_t* argb_ptr = nullptr;
-    uint8_t* i420_ptr = nullptr;
     std::shared_ptr<oboe::AudioStream> audio_stream;
     jobject audio_cb_obj = nullptr;
     jmethodID on_audio_mid = nullptr;
@@ -80,14 +83,10 @@ static ZenithEngine g_engine;
 
 static void libretro_log(enum retro_log_level, const char *fmt, ...) { va_list a; va_start(a,fmt); __android_log_vprint(ANDROID_LOG_INFO,"Libretro",fmt,a); va_end(a); }
 
-static JNIEnv* getJniEnv(bool& attached) {
+static JNIEnv* getJniEnv() {
     JNIEnv* env;
-    int status = g_engine.jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
-    if (status == JNI_EDETACHED) {
+    if (g_engine.jvm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
         g_engine.jvm->AttachCurrentThread(&env, nullptr);
-        attached = true;
-    } else {
-        attached = false;
     }
     return env;
 }
@@ -137,17 +136,28 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
     if (!data || !g_engine.argb_ptr) return;
 
     retro_pixel_format fmt = g_engine.pixel_fmt.load();
+
+    size_t raw_size = h * pitch;
+    if (g_engine.raw_frame_buf.size() < raw_size) {
+        g_engine.raw_frame_buf.resize(raw_size);
+    }
+    std::memcpy(g_engine.raw_frame_buf.data(), data, raw_size);
+    g_engine.last_w = w;
+    g_engine.last_h = h;
+    g_engine.last_pitch = pitch;
+
     uint8_t* argb = g_engine.argb_ptr;
+    const uint8_t* raw = g_engine.raw_frame_buf.data();
 
     for (unsigned y = 0; y < h; y++) {
         for (unsigned x = 0; x < w; x++) {
             uint32_t color;
             if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-                uint32_t pix = ((const uint32_t*)data)[y * (pitch / 4) + x];
+                uint32_t pix = ((const uint32_t*)raw)[y * (pitch / 4) + x];
                 uint8_t r = pix & 0xFF, g = (pix >> 8) & 0xFF, b = (pix >> 16) & 0xFF;
                 color = 0xFF000000 | ((uint32_t)b << 16) | ((uint32_t)g << 8) | (uint32_t)r;
             } else {
-                uint16_t pix = ((const uint16_t*)data)[y * (pitch / 2) + x];
+                uint16_t pix = ((const uint16_t*)raw)[y * (pitch / 2) + x];
                 uint8_t R = (pix >> 11) & 0x1F;
                 uint8_t G = (pix >> 5) & 0x3F;
                 uint8_t B = pix & 0x1F;
@@ -161,46 +171,16 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         }
     }
 
-    if (g_engine.i420_ptr) {
-        uint8_t* y_plane = g_engine.i420_ptr;
-        uint8_t* u_plane = g_engine.i420_ptr + w * h;
-        uint8_t* v_plane = u_plane + (w / 2) * (h / 2);
-        uint32_t* argb_pixels = (uint32_t*)g_engine.argb_ptr;
-
-        for (unsigned y = 0; y < h; y++) {
-            for (unsigned x = 0; x < w; x++) {
-                uint32_t pixel = argb_pixels[y * w + x];
-                int r = pixel & 0xFF;
-                int g = (pixel >> 8) & 0xFF;
-                int b = (pixel >> 16) & 0xFF;
-
-                int yy = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-                y_plane[y * w + x] = clamp_uint8(yy);
-
-                if ((y & 1) == 0 && (x & 1) == 0) {
-                    int uu = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                    int vv = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
-                    u_plane[(y / 2) * (w / 2) + (x / 2)] = clamp_uint8(uu);
-                    v_plane[(y / 2) * (w / 2) + (x / 2)] = clamp_uint8(vv);
-                }
-            }
-        }
-    }
-
-    bool attached = false;
-    JNIEnv* env = getJniEnv(attached);
+    JNIEnv* env = getJniEnv();
     if (env) {
         env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid,
-            g_engine.argb_buf, (jint)w, (jint)h,
-            g_engine.i420_buf, (jint)w, (jint)(w / 2));
-        if (attached) g_engine.jvm->DetachCurrentThread();
+            g_engine.argb_buf, (jint)w, (jint)h);
     }
 }
 
 static void sendAudioToJava(const int16_t *d, size_t f) {
     if (g_engine.audio_cb_obj && g_engine.audio_buf) {
-        bool attached = false;
-        JNIEnv* env = getJniEnv(attached);
+        JNIEnv* env = getJniEnv();
         if (!env) return;
         size_t bytes = f * 2 * sizeof(int16_t);
         jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
@@ -209,7 +189,6 @@ static void sendAudioToJava(const int16_t *d, size_t f) {
             memcpy(buf_ptr, d, bytes);
             env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)(f * 2));
         }
-        if (attached) g_engine.jvm->DetachCurrentThread();
     }
 }
 
@@ -463,24 +442,19 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setLocalAudioMute
     }
 }
 
-JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels, jobject i420) {
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCallback(JNIEnv* env, jobject, jobject cb, jobject pixels) {
     if(g_engine.callback_obj) env->DeleteGlobalRef(g_engine.callback_obj);
     if(g_engine.argb_buf) env->DeleteGlobalRef(g_engine.argb_buf);
-    if(g_engine.i420_buf) env->DeleteGlobalRef(g_engine.i420_buf);
     if(cb) {
         g_engine.callback_obj = env->NewGlobalRef(cb);
         g_engine.argb_buf = env->NewGlobalRef(pixels);
         g_engine.argb_ptr = (uint8_t*)env->GetDirectBufferAddress(pixels);
-        g_engine.i420_buf = env->NewGlobalRef(i420);
-        g_engine.i420_ptr = (uint8_t*)env->GetDirectBufferAddress(i420);
         env->GetJavaVM(&g_engine.jvm);
-        g_engine.on_frame_mid = env->GetMethodID(env->GetObjectClass(cb), "onFrameReady", "(Ljava/nio/ByteBuffer;IILjava/nio/ByteBuffer;II)V");
+        g_engine.on_frame_mid = env->GetMethodID(env->GetObjectClass(cb), "onFrameReady", "(Ljava/nio/ByteBuffer;II)V");
     } else {
         g_engine.callback_obj = nullptr;
         g_engine.argb_buf = nullptr;
         g_engine.argb_ptr = nullptr;
-        g_engine.i420_buf = nullptr;
-        g_engine.i420_ptr = nullptr;
     }
 }
 
@@ -505,5 +479,55 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setInputState(JNI
 
 JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) {
     return (jint)g_engine.av_sample_rate;
+}
+
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_fillI420Buffer(
+    JNIEnv* env, jobject,
+    jobject yBuf, jobject uBuf, jobject vBuf,
+    jint width, jint height, jint yStride, jint uvStride)
+{
+    if (g_engine.raw_frame_buf.empty()) return;
+    uint8_t* y_plane = (uint8_t*)env->GetDirectBufferAddress(yBuf);
+    uint8_t* u_plane = (uint8_t*)env->GetDirectBufferAddress(uBuf);
+    uint8_t* v_plane = (uint8_t*)env->GetDirectBufferAddress(vBuf);
+    if (!y_plane || !u_plane || !v_plane) return;
+
+    const uint8_t* data = g_engine.raw_frame_buf.data();
+    unsigned fw = g_engine.last_w;
+    unsigned fh = g_engine.last_h;
+    size_t pitch = g_engine.last_pitch;
+    retro_pixel_format fmt = g_engine.pixel_fmt.load();
+
+    unsigned conv_w = std::min((unsigned)width, fw);
+    unsigned conv_h = std::min((unsigned)height, fh);
+
+    for (unsigned y = 0; y < conv_h; y++) {
+        for (unsigned x = 0; x < conv_w; x++) {
+            int r, g, b;
+            if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+                uint32_t pix = ((const uint32_t*)data)[y * (pitch / 4) + x];
+                r = pix & 0xFF;
+                g = (pix >> 8) & 0xFF;
+                b = (pix >> 16) & 0xFF;
+            } else {
+                uint16_t pix = ((const uint16_t*)data)[y * (pitch / 2) + x];
+                r = ((pix >> 11) & 0x1F) << 3;
+                g = ((pix >> 5) & 0x3F) << 2;
+                b = (pix & 0x1F) << 3;
+            }
+            int yy = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+            y_plane[y * yStride + x] = clamp_uint8(yy);
+            if ((y & 1) == 0 && (x & 1) == 0) {
+                int uu = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+                int vv = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                u_plane[(y / 2) * uvStride + (x / 2)] = clamp_uint8(uu);
+                v_plane[(y / 2) * uvStride + (x / 2)] = clamp_uint8(vv);
+            }
+        }
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCasting(JNIEnv*, jobject, jboolean casting) {
+    g_engine.is_casting.store(casting);
 }
 }

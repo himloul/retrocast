@@ -53,6 +53,10 @@ class PooledI420Buffer(
         retain()
         return this
     }
+
+    fun resetRefCount() {
+        refCount.set(1)
+    }
 }
 
 class I420BufferPool {
@@ -65,6 +69,7 @@ class I420BufferPool {
             existing.getDataY().clear()
             existing.getDataU().clear()
             existing.getDataV().clear()
+            existing.resetRefCount()
             return existing
         }
         val ySize = yStride * h

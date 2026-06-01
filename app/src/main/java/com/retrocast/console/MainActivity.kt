@@ -92,7 +92,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var isCoreReady = false
 
     private var pixelBuffer: ByteBuffer? = null
-    private var i420Buffer: ByteBuffer? = null
     private var audioBuffer: ByteBuffer? = null
     private val i420BufferPool = I420BufferPool()
 
@@ -133,21 +132,15 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         streamingManager?.sendAudio(buffer, samples)
     }
 
-    override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int) {
+    override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int) {
         emulatorView?.setFrame(pixels, width, height)
         nativePresentation?.setFrame(pixels, width, height)
         if (!isCasting) return
 
+        val yStride = width
+        val uvStride = width / 2
         val buf = i420BufferPool.acquire(width, height, yStride, uvStride)
-        val ySize = yStride * height
-        val uvSize = uvStride * (height / 2)
-
-        i420.position(0).limit(ySize)
-        buf.dataY.put(i420.slice())
-        i420.position(ySize).limit(ySize + uvSize)
-        buf.dataU.put(i420.slice())
-        i420.position(ySize + uvSize).limit(ySize + uvSize * 2)
-        buf.dataV.put(i420.slice())
+        nativeRetro.fillI420Buffer(buf.dataY, buf.dataU, buf.dataV, width, height, yStride, uvStride)
 
         val frame = VideoFrame(buf, 0, System.nanoTime())
         videoCapturer.onFrameCaptured(frame)
@@ -178,7 +171,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         nativeRetro = NativeRetro()
         
         pixelBuffer = ByteBuffer.allocateDirect(MAX_PIXELS * 4)
-        i420Buffer = ByteBuffer.allocateDirect(MAX_PIXELS * 3 / 2)
 
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.registerDisplayListener(displayListener, null)
@@ -393,8 +385,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
         if (!isCoreInitialized) {
             nativeRetro.init(coreFile.absolutePath)
-            if (pixelBuffer != null && i420Buffer != null) {
-                nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+            if (pixelBuffer != null) {
+                nativeRetro.setCallback(this@MainActivity, pixelBuffer)
             }
             audioBuffer = ByteBuffer.allocateDirect(AUDIO_BUFFER_SIZE)
             audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
@@ -511,6 +503,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
     private fun toggleCasting() {
         if (isCasting) {
+            nativeRetro.setCasting(false)
             nativeRetro.setLocalAudioMuted(false)
             signalingServer?.stop()
             signalingServer = null
@@ -581,6 +574,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     signalingServer = server
                     castUrl = "http://$ip:$port"
                     isCasting = true
+                    nativeRetro.setCasting(true)
                     nativeRetro.setLocalAudioMuted(true)
                 }
             }

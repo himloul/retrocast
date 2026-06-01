@@ -10,7 +10,7 @@ class NativeRetro {
     }
 
     interface FrameCallback {
-        fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int, i420: ByteBuffer, yStride: Int, uvStride: Int)
+        fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int)
     }
 
     interface AudioCallback {
@@ -44,7 +44,7 @@ class NativeRetro {
         setInputState(currentInputMask)
     }
 
-    external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?, i420: ByteBuffer?)
+    external fun setCallback(callback: FrameCallback?, pixels: ByteBuffer?)
 
     external fun setAudioCallback(callback: AudioCallback?, buffer: ByteBuffer?)
 
@@ -55,4 +55,8 @@ class NativeRetro {
     external fun saveState(path: String): Boolean
 
     external fun loadState(path: String): Boolean
+
+    external fun fillI420Buffer(yBuf: ByteBuffer, uBuf: ByteBuffer, vBuf: ByteBuffer, width: Int, height: Int, yStride: Int, uvStride: Int)
+
+    external fun setCasting(casting: Boolean)
 }

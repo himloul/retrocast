@@ -6,7 +6,12 @@ import org.webrtc.*
  * A custom WebRTC capturer that receives frames directly from Libretro.
  */
 class LibretroVideoCapturer : VideoCapturer {
+    companion object {
+        private const val MIN_FRAME_INTERVAL_NS = 16_666_666L
+    }
+
     private var capturerObserver: CapturerObserver? = null
+    private var lastFrameTimestampNs = 0L
 
     override fun initialize(
         surfaceTextureHelper: SurfaceTextureHelper?,
@@ -17,11 +22,9 @@ class LibretroVideoCapturer : VideoCapturer {
     }
 
     override fun startCapture(width: Int, height: Int, framerate: Int) {
-        // Ready to receive frames
     }
 
     override fun stopCapture() {
-        // Cleanup if needed
     }
 
     override fun changeCaptureFormat(width: Int, height: Int, framerate: Int) {
@@ -32,10 +35,13 @@ class LibretroVideoCapturer : VideoCapturer {
     override fun dispose() {
     }
 
-    /**
-     * Called when Libretro has a new frame.
-     */
     fun onFrameCaptured(frame: VideoFrame) {
+        val now = System.nanoTime()
+        if (now - lastFrameTimestampNs < MIN_FRAME_INTERVAL_NS) {
+            frame.release()
+            return
+        }
+        lastFrameTimestampNs = now
         capturerObserver?.onFrameCaptured(frame)
     }
 }
