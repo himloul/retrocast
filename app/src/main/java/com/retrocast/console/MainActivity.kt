@@ -291,10 +291,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             }
             if (loadedRomPath != null) {
                 if (isCasting) {
-                    Box(modifier = Modifier.weight(0.45f).fillMaxWidth()) {
-                        CastDashboard(castUrl = castUrl)
-                    }
-                    Box(modifier = Modifier.weight(0.5f).fillMaxWidth()) {
+                    CastDashboard(castUrl = castUrl)
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
                     }
                 } else {
@@ -612,7 +610,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 @Composable
 fun CastDashboard(castUrl: String) {
     val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(castUrl, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             IconButton(onClick = {
