@@ -35,17 +35,19 @@ open class EmulatorView @JvmOverloads constructor(
         ready.copyPixelsFromBuffer(pixels)
         val surface = holder.surface
         if (surface != null && surface.isValid) {
-            val canvas = surface.lockCanvas(null)
-            if (canvas != null) {
-                val vw = canvas.width; val vh = canvas.height
-                val bw = ready.width; val bh = ready.height
-                val scale = Math.min(vw.toFloat() / bw, vh.toFloat() / bh)
-                val dw = (bw * scale).toInt(); val dh = (bh * scale).toInt()
-                val dx = (vw - dw) / 2; val dy = (vh - dh) / 2
-                destRect.set(dx, dy, dx + dw, dy + dh)
-                canvas.drawBitmap(ready, null, destRect, paint)
-                surface.unlockCanvasAndPost(canvas)
-            }
+            try {
+                val canvas = surface.lockCanvas(null)
+                if (canvas != null) {
+                    val vw = canvas.width; val vh = canvas.height
+                    val bw = ready.width; val bh = ready.height
+                    val scale = Math.min(vw.toFloat() / bw, vh.toFloat() / bh)
+                    val dw = (bw * scale).toInt(); val dh = (bh * scale).toInt()
+                    val dx = (vw - dw) / 2; val dy = (vh - dh) / 2
+                    destRect.set(dx, dy, dx + dw, dy + dh)
+                    canvas.drawBitmap(ready, null, destRect, paint)
+                    try { surface.unlockCanvasAndPost(canvas) } catch (_: Exception) {}
+                }
+            } catch (_: Exception) { }
         }
     }
 }

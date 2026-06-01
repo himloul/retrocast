@@ -53,13 +53,11 @@ import android.os.Looper
 import java.nio.ByteBuffer
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
 
 import android.graphics.Bitmap
@@ -134,8 +132,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int) {
-        emulatorView?.setFrame(pixels, width, height)
-        nativePresentation?.setFrame(pixels, width, height)
+        try { emulatorView?.setFrame(pixels, width, height) } catch (_: Exception) {}
+        try { nativePresentation?.setFrame(pixels, width, height) } catch (_: Exception) {}
         if (!isCasting) return
 
         val yStride = width
@@ -209,7 +207,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.FolderOpen, null) }, label = { Text("Load") }, selected = false, onClick = { loadSramFromDisk(); scope.launch { drawerState.close() } })
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.Refresh, null) }, label = { Text("Reset") }, selected = false, onClick = { resetGame(); scope.launch { drawerState.close() } })
                                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-                                NavigationDrawerItem(icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { quitGame(); scope.launch { drawerState.close() } })
+                                NavigationDrawerItem(icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { shutdownGame(); scope.launch { drawerState.close() } })
                             }
                         }
                     }
@@ -496,16 +494,11 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         }
     }
 
-    private fun quitGame() {
-        shutdownGame()
-    }
-
     private fun toggleCasting() {
         if (isCasting) {
             nativeRetro.setCasting(false)
             nativeRetro.setLocalAudioMuted(false)
-            signalingServer?.stop()
-            signalingServer = null
+            signalingServer?.stopSession()
             streamingManager?.dispose()
             streamingManager = null
             isCasting = false
@@ -542,9 +535,12 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 })
                 sm.startStreaming(videoCapturer)
 
-                val server = SignalingServer(this@MainActivity, port)
-                server.start(
-                    onClientConnected = {
+                if (signalingServer == null) {
+                    signalingServer = SignalingServer(this@MainActivity, port)
+                }
+                signalingServer?.startServer()
+                signalingServer?.startSession(
+                    clientCb = {
                         sm.createOffer { offer ->
                             offer?.let {
                                 val json = JSONObject().apply {
@@ -556,7 +552,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                             }
                         }
                     },
-                    onSdpReceived = { sdpJson ->
+                    sdpCb = { sdpJson ->
                         val json = JSONObject(sdpJson)
                         if (json.has("type") && json.getString("type") == "answer") {
                             val sdp = SessionDescription(SessionDescription.Type.ANSWER, json.getString("sdp"))
@@ -570,7 +566,6 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
                 withContext(Dispatchers.Main) {
                     streamingManager = sm
-                    signalingServer = server
                     castUrl = "http://$ip:$port"
                     isCasting = true
                     nativeRetro.setCasting(true)
@@ -594,7 +589,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         dm.unregisterDisplayListener(displayListener)
         nativePresentation?.dismiss()
         shutdownGame()
-        signalingServer?.stop()
+        signalingServer?.stopServer()
         streamingManager?.dispose()
     }
 
@@ -695,27 +690,24 @@ fun GameCard(rom: File, onClick: () -> Unit) {
 
 @Composable
 fun QrCodeView(url: String, modifier: Modifier = Modifier) {
-    val matrix = remember(url) {
+    val bmp = remember(url) {
         try {
-            QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 256, 256)
+            val matrix = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 256, 256)
+            val w = matrix.width; val h = matrix.height
+            val pixels = IntArray(w * h) { i ->
+                if (matrix[i % w, i / w]) -0x1000000 else 0
+            }
+            Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
         } catch (e: Exception) {
             null
         }
     }
-    if (matrix == null) return
-    val qrColor = MaterialTheme.colorScheme.onBackground
-    Canvas(modifier = modifier) {
-        val cellSize = minOf(size.width, size.height) / matrix.width
-        for (y in 0 until matrix.height) {
-            for (x in 0 until matrix.width) {
-                if (matrix[x, y]) {
-                    drawRect(
-                        color = qrColor,
-                        topLeft = Offset(x * cellSize, y * cellSize),
-                        size = Size(cellSize, cellSize)
-                    )
-                }
-            }
-        }
+    if (bmp != null) {
+        Image(
+            bitmap = bmp.asImageBitmap(),
+            contentDescription = "QR Code",
+            modifier = modifier,
+            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onBackground)
+        )
     }
 }

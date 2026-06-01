@@ -17,14 +17,29 @@ import kotlinx.html.*
 import java.time.Duration
 
 class SignalingServer(private val context: Context, private val port: Int) {
+    @Volatile
     private var server: ApplicationEngine? = null
     @Volatile
     private var currentSession: WebSocketServerSession? = null
     private var nsdManager: NsdManager? = null
 
+    @Volatile
+    private var onClientConnected: () -> Unit = {}
+    @Volatile
+    private var onSdpReceived: (String) -> Unit = {}
+
     private val tag = "SignalingServer"
 
-    fun start(onClientConnected: () -> Unit, onSdpReceived: (String) -> Unit) {
+    @Synchronized
+    fun startServer() {
+        if (server != null) return
+        try {
+            val ss = java.net.ServerSocket(port)
+            ss.close()
+        } catch (e: Exception) {
+            Log.e(tag, "Port $port is already in use, cannot start server")
+            return
+        }
         server = embeddedServer(CIO, port = port) {
             install(WebSockets) {
                 pingPeriod = Duration.ofSeconds(15)
@@ -188,10 +203,45 @@ class SignalingServer(private val context: Context, private val port: Int) {
             }
         }
         
-        server?.start(wait = false)
+        try {
+            server?.start(wait = false)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to start server on port $port", e)
+            server = null
+            return
+        }
         try { registerService(port) } catch (e: Exception) {
             Log.e(tag, "mDNS registration failed", e)
         }
+    }
+
+    fun stopServer() {
+        try { runBlocking { currentSession?.close() } } catch (e: Exception) {
+            Log.e(tag, "Error closing session", e)
+        }
+        try { server?.stop(500, 1000) } catch (e: Exception) {
+            Log.e(tag, "Error stopping server", e)
+        }
+        server = null
+        unregisterService()
+    }
+
+    fun startSession(clientCb: () -> Unit, sdpCb: (String) -> Unit) {
+        onClientConnected = clientCb
+        onSdpReceived = sdpCb
+    }
+
+    fun stopSession() {
+        try { runBlocking { currentSession?.close() } } catch (e: Exception) {
+            Log.e(tag, "Error closing session", e)
+        }
+    }
+
+    private val nsdListener = object : NsdManager.RegistrationListener {
+        override fun onServiceRegistered(p0: NsdServiceInfo?) {}
+        override fun onRegistrationFailed(p0: NsdServiceInfo?, p1: Int) {}
+        override fun onServiceUnregistered(p0: NsdServiceInfo?) {}
+        override fun onUnregistrationFailed(p0: NsdServiceInfo?, p1: Int) {}
     }
 
     private fun registerService(servicePort: Int) {
@@ -201,13 +251,17 @@ class SignalingServer(private val context: Context, private val port: Int) {
             port = servicePort
         }
         nsdManager = (context.getSystemService(Context.NSD_SERVICE) as NsdManager).apply {
-            registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, object : NsdManager.RegistrationListener {
-                override fun onServiceRegistered(p0: NsdServiceInfo?) {}
-                override fun onRegistrationFailed(p0: NsdServiceInfo?, p1: Int) {}
-                override fun onServiceUnregistered(p0: NsdServiceInfo?) {}
-                override fun onUnregistrationFailed(p0: NsdServiceInfo?, p1: Int) {}
-            })
+            registerService(serviceInfo, NsdManager.PROTOCOL_DNS_SD, nsdListener)
         }
+    }
+
+    private fun unregisterService() {
+        try {
+            nsdManager?.unregisterService(nsdListener)
+        } catch (e: Exception) {
+            Log.e(tag, "Error unregistering mDNS", e)
+        }
+        nsdManager = null
     }
 
     suspend fun sendMessage(message: String) {
@@ -215,17 +269,6 @@ class SignalingServer(private val context: Context, private val port: Int) {
             currentSession?.send(Frame.Text(message))
         } catch (e: Exception) {
             Log.e(tag, "Error sending message: ${e.message}")
-        }
-    }
-
-    fun stop() {
-        try {
-            runBlocking { currentSession?.close() }
-        } catch (e: Exception) {
-            Log.e(tag, "Error closing session", e)
-        }
-        try { server?.stop(500, 1000) } catch (e: Exception) {
-            Log.e(tag, "Error stopping server", e)
         }
     }
 }

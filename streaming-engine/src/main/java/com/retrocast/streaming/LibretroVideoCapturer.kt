@@ -42,6 +42,11 @@ class LibretroVideoCapturer : VideoCapturer {
             return
         }
         lastFrameTimestampNs = now
-        capturerObserver?.onFrameCaptured(frame)
+        val observer = capturerObserver
+        if (observer != null) {
+            observer.onFrameCaptured(frame)
+        } else {
+            frame.release()
+        }
     }
 }

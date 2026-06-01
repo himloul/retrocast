@@ -140,17 +140,19 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
 
     retro_pixel_format fmt = g_engine.pixel_fmt.load();
 
-    size_t raw_size = h * pitch;
-    if (g_engine.raw_frame_buf.size() < raw_size) {
-        g_engine.raw_frame_buf.resize(raw_size);
+    if (g_engine.is_casting.load()) {
+        size_t raw_size = h * pitch;
+        if (g_engine.raw_frame_buf.size() < raw_size) {
+            g_engine.raw_frame_buf.resize(raw_size);
+        }
+        std::memcpy(g_engine.raw_frame_buf.data(), data, raw_size);
+        g_engine.last_w = w;
+        g_engine.last_h = h;
+        g_engine.last_pitch = pitch;
     }
-    std::memcpy(g_engine.raw_frame_buf.data(), data, raw_size);
-    g_engine.last_w = w;
-    g_engine.last_h = h;
-    g_engine.last_pitch = pitch;
 
     uint8_t* argb = g_engine.argb_ptr;
-    const uint8_t* raw = g_engine.raw_frame_buf.data();
+    const uint8_t* raw = (const uint8_t*)data;
 
     for (unsigned y = 0; y < h; y++) {
         if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
