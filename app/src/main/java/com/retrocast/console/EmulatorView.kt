@@ -9,11 +9,15 @@ import android.util.AttributeSet
 import android.view.View
 import java.nio.ByteBuffer
 
-class EmulatorView @JvmOverloads constructor(
+open class EmulatorView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
+    companion object {
+        private const val BASE_WIDTH = 240
+        private const val BASE_HEIGHT = 160
+    }
 
     private var frameBitmap: Bitmap? = null
     private val paint = Paint().apply { isFilterBitmap = false }
@@ -23,10 +27,9 @@ class EmulatorView @JvmOverloads constructor(
         val width = MeasureSpec.getSize(widthMeasureSpec)
         val height = MeasureSpec.getSize(heightMeasureSpec)
         if (width <= 0 || height <= 0) { super.onMeasure(widthMeasureSpec, heightMeasureSpec); return }
-        val baseWidth = 240; val baseHeight = 160
-        val scaleX = width / baseWidth; val scaleY = height / baseHeight
+        val scaleX = width / BASE_WIDTH; val scaleY = height / BASE_HEIGHT
         val scale = Math.max(1, Math.min(scaleX, scaleY))
-        setMeasuredDimension(baseWidth * scale, baseHeight * scale)
+        setMeasuredDimension(BASE_WIDTH * scale, BASE_HEIGHT * scale)
     }
 
     fun setFrame(pixels: ByteBuffer, width: Int, height: Int) {

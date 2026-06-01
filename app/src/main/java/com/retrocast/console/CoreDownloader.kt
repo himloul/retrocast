@@ -48,19 +48,18 @@ object CoreDownloader {
             val body = response.readBytes()
             FileOutputStream(tempZip).use { it.write(body) }
 
-            // Extract the .so from the zip
-            val zis = java.util.zip.ZipInputStream(tempZip.inputStream())
-            var entry = zis.nextEntry
-            while (entry != null) {
-                if (entry.name.endsWith(".so")) {
-                    val outFile = File(destinationDir, coreName)
-                    FileOutputStream(outFile).use { zis.copyTo(it) }
-                    zis.closeEntry()
-                    break
+            java.util.zip.ZipInputStream(tempZip.inputStream()).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    if (entry.name.endsWith(".so")) {
+                        val outFile = File(destinationDir, coreName)
+                        FileOutputStream(outFile).use { zis.copyTo(it) }
+                        zis.closeEntry()
+                        break
+                    }
+                    entry = zis.nextEntry
                 }
-                entry = zis.nextEntry
             }
-            zis.close()
             tempZip.delete()
             return@withContext true
         } catch (e: Exception) {

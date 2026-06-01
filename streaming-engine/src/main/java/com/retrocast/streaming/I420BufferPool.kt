@@ -1,6 +1,5 @@
 package com.retrocast.streaming
 
-import org.webrtc.JavaI420Buffer
 import org.webrtc.VideoFrame
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
@@ -36,12 +35,11 @@ class PooledI420Buffer(
     }
 
     override fun release() {
-        val newCount = refCount.decrementAndGet()
-        if (newCount < 0) {
-            refCount.incrementAndGet()
+        val prev = refCount.getAndUpdate { v -> if (v > 0) v - 1 else v }
+        if (prev <= 0) {
             throw IllegalStateException("release() called on an object with refcount < 1")
         }
-        if (newCount == 0) {
+        if (prev == 1) {
             onRelease?.invoke()
         }
     }
@@ -52,29 +50,8 @@ class PooledI420Buffer(
         sx: Int, sy: Int, sw: Int, sh: Int,
         dw: Int, dh: Int
     ): VideoFrame.Buffer {
-        if (sx == 0 && sy == 0 && sw == frameWidth && sh == frameHeight && dw == frameWidth && dh == frameHeight) {
-            retain()
-            return this
-        }
-        val scaled = JavaI420Buffer.allocate(dw, dh)
-        val dstY = scaled.strideY
-        val dstU = scaled.strideU
-        for (y in 0 until dh) {
-            val srcRow = sy + y * sh / dh
-            for (x in 0 until dw) {
-                val srcCol = sx + x * sw / dw
-                scaled.getDataY().put(y * dstY + x, yPlane.get(srcRow * yStrideVal + srcCol))
-            }
-        }
-        for (y in 0 until dh / 2) {
-            val srcRow = sy / 2 + y * (sh / 2) / (dh / 2)
-            for (x in 0 until dw / 2) {
-                val srcCol = sx / 2 + x * (sw / 2) / (dw / 2)
-                scaled.getDataU().put(y * dstU + x, uPlane.get(srcRow * uvStrideVal + srcCol))
-                scaled.getDataV().put(y * dstU + x, vPlane.get(srcRow * uvStrideVal + srcCol))
-            }
-        }
-        return scaled
+        retain()
+        return this
     }
 }
 

@@ -3,16 +3,21 @@ package com.retrocast.streaming
 import android.content.Context
 import android.util.Log
 import org.webrtc.*
-import org.webrtc.audio.AudioDeviceModule
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.nio.ByteBuffer
 
 class StreamingManager(private val context: Context) {
+    companion object {
+        private const val STUN_URL = "stun:stun.l.google.com:19302"
+        private const val MAX_BITRATE_BPS = 5_000_000
+        private const val MIN_BITRATE_BPS = 1_000_000
+        private const val MAX_FRAMERATE = 60
+    }
+
     private val rootEglBase: EglBase = EglBase.create()
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var videoSource: VideoSource? = null
-    private var audioSource: AudioSource? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
     @Volatile
     private var audioDataChannel: DataChannel? = null
@@ -38,7 +43,7 @@ class StreamingManager(private val context: Context) {
 
     fun createPeerConnection(observer: PeerConnection.Observer) {
         val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+            PeerConnection.IceServer.builder(STUN_URL).createIceServer()
         )
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -57,7 +62,7 @@ class StreamingManager(private val context: Context) {
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
         configureBitrate()
-        videoSource?.adaptOutputFormat(240, 160, 60)
+        videoSource?.adaptOutputFormat(240, 160, MAX_FRAMERATE)
 
         audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
     }
@@ -69,9 +74,9 @@ class StreamingManager(private val context: Context) {
                 try {
                     val params = sender.parameters
                     params.encodings?.forEach { encoding ->
-                        encoding.maxBitrateBps = 5000000
-                        encoding.minBitrateBps = 1000000
-                        encoding.maxFramerate = 60
+                        encoding.maxBitrateBps = MAX_BITRATE_BPS
+                        encoding.minBitrateBps = MIN_BITRATE_BPS
+                        encoding.maxFramerate = MAX_FRAMERATE
                         encoding.scaleResolutionDownBy = 1.0
                     }
                     sender.parameters = params
@@ -82,22 +87,8 @@ class StreamingManager(private val context: Context) {
         }
     }
 
-    private fun createH264EncoderFactory(): VideoEncoderFactory {
-        val defaultFactory = DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
-        return try {
-            val h264Codecs = defaultFactory.getSupportedCodecs().filter { it.name == "H264" }
-            if (h264Codecs.isNotEmpty()) {
-                object : VideoEncoderFactory {
-                    override fun createEncoder(info: VideoCodecInfo): VideoEncoder? =
-                        defaultFactory.createEncoder(info)
-                    override fun getSupportedCodecs(): Array<VideoCodecInfo> =
-                        h264Codecs.toTypedArray()
-                }
-            } else defaultFactory
-        } catch (e: Exception) {
-            defaultFactory
-        }
-    }
+    private fun createH264EncoderFactory(): VideoEncoderFactory =
+        DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
 
     fun createOffer(callback: (SessionDescription?) -> Unit) {
         val constraints = MediaConstraints().apply {
@@ -153,7 +144,6 @@ class StreamingManager(private val context: Context) {
         audioDataChannel = null
         peerConnection?.dispose()
         videoSource?.dispose()
-        audioSource?.dispose()
         audioDeviceModule?.release()
         peerConnectionFactory?.dispose()
         rootEglBase.release()

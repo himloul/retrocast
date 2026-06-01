@@ -52,7 +52,7 @@ fun TouchpadController(
             var pressedButtons by remember { mutableStateOf(setOf<Int>()) }
             val haptic = hapticManager
 
-            GamepadBase(
+            ControlCircle(
                 modifier = Modifier
                     .size(dpadSize)
                     .clip(CircleShape)
@@ -140,7 +140,7 @@ fun TouchpadController(
                 if (pressed) hapticManager.triggerTick()
             }
 
-            GamepadBase(modifier = Modifier.size(dpadSize)) {
+            ControlCircle(modifier = Modifier.size(dpadSize)) {
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     val off = minOf(maxWidth, maxHeight) / 2 * 0.35f
                     ActionCircle("A", Modifier.align(Alignment.Center).offset(x = off, y = -off), MaterialTheme.colorScheme.tertiary) { 
@@ -173,7 +173,7 @@ fun TouchpadController(
 }
 
 @Composable
-fun GamepadBase(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
+fun ControlCircle(modifier: Modifier, content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = modifier
             .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f), CircleShape),

@@ -15,14 +15,8 @@ find_library(
     log
 )
 
-find_library(
-    android-lib
-    android
-)
-
 target_link_libraries(
     "emulator-core"
     oboe::oboe
     ${log-lib}
-    ${android-lib}
 )

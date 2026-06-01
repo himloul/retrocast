@@ -1,7 +1,5 @@
 -keep class org.webrtc.** { *; }
--keep class com.retrocast.emulator.** { *; }
--keep class com.retrocast.streaming.** { *; }
--keep class com.retrocast.console.** { *; }
+-keep class com.retrocast.emulator.NativeRetro { *; }
 -dontwarn io.netty.internal.tcnative.**
 -dontwarn org.apache.log4j.**
 -dontwarn org.apache.logging.log4j.**
@@ -9,5 +7,3 @@
 -dontwarn org.slf4j.impl.**
 -dontwarn reactor.blockhound.**
 -dontwarn java.lang.management.**
--keep class java.lang.management.ManagementFactory { *; }
--keep class java.lang.management.RuntimeMXBean { *; }

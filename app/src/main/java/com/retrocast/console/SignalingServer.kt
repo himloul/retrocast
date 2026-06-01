@@ -15,7 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.html.*
 import java.time.Duration
 
-class SignalingServer(private val context: Context, private val port: Int = 8080) {
+class SignalingServer(private val context: Context, private val port: Int) {
     private var server: NettyApplicationEngine? = null
     @Volatile
     private var currentSession: WebSocketServerSession? = null

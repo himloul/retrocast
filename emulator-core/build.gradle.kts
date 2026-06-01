@@ -5,16 +5,15 @@ plugins {
 
 android {
     namespace = "com.retrocast.emulator"
+    ndkVersion = "26.1.10909125"
     compileSdk = 34
 
     defaultConfig {
         minSdk = 26
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("consumer-rules.pro")
-        
+        targetSdk = 34
+
         externalNativeBuild {
             cmake {
-                cppFlags("")
                 arguments("-DANDROID_STL=c++_shared")
             }
         }
@@ -49,6 +48,6 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("com.google.oboe:oboe:1.8.1")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("com.google.oboe:oboe:1.9.0")
 }

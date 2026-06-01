@@ -9,8 +9,7 @@ android {
 
     defaultConfig {
         minSdk = 26
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        consumerProguardFiles("consumer-rules.pro")
+        targetSdk = 34
     }
 
     buildTypes {
@@ -33,7 +32,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.12.0")
+    implementation("androidx.core:core-ktx:1.13.1")
     // WebRTC for low-latency streaming
     implementation("com.github.webrtc-sdk:android:104.5112.01")
 }

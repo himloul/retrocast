@@ -13,6 +13,7 @@ import java.net.URLEncoder
 
 object ThumbnailManager {
     private const val BOXART_BASE = "https://thumbnails.libretro.com/Nintendo%20-%20Game%20Boy%20Advance/Named_Boxarts"
+    private const val NETWORK_TIMEOUT_MS = 4000
     private const val TAG = "ThumbnailManager"
 
     private var cacheDir: File? = null
@@ -40,8 +41,8 @@ object ThumbnailManager {
                 val url = "$BOXART_BASE/$encoded.png"
                 try {
                     val conn = URL(url).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 4000
-                    conn.readTimeout = 4000
+                    conn.connectTimeout = NETWORK_TIMEOUT_MS
+                    conn.readTimeout = NETWORK_TIMEOUT_MS
                     conn.connect()
                     if (conn.responseCode == 200) {
                         val bytes = conn.inputStream.use { it.readBytes() }

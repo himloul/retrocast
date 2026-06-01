@@ -10,7 +10,6 @@
 #include <cstring>
 #include <cstdlib>
 #include <chrono>
-#include <condition_variable>
 #include <fstream>
 #include <sys/stat.h>
 
@@ -28,8 +27,6 @@
 #define RETRO_ENVIRONMENT_GET_LOG_INTERFACE 27
 #define RETRO_ENVIRONMENT_GET_VARIABLE 15
 #define RETRO_ENVIRONMENT_GET_CAN_DUPE 10
-#define RETRO_MEMORY_SAVE_RAM 0
-
 struct retro_variable { const char *key; const char *value; };
 typedef void (*retro_log_printf_t)(enum retro_log_level level, const char *fmt, ...);
 struct retro_log_callback { retro_log_printf_t log; };
@@ -48,8 +45,6 @@ struct ZenithEngine {
     RingBuffer audio_rb;
     std::atomic<bool> emu_running{false};
     std::thread emu_thread;
-    std::condition_variable audio_cv;
-    std::mutex audio_cv_mtx;
     void *core_handle = nullptr;
     retro_run_t core_run = nullptr;
     std::atomic<retro_pixel_format> pixel_fmt{RETRO_PIXEL_FORMAT_0RGB1555};
@@ -85,15 +80,27 @@ static ZenithEngine g_engine;
 
 static void libretro_log(enum retro_log_level, const char *fmt, ...) { va_list a; va_start(a,fmt); __android_log_vprint(ANDROID_LOG_INFO,"Libretro",fmt,a); va_end(a); }
 
+static JNIEnv* getJniEnv(bool& attached) {
+    JNIEnv* env;
+    int status = g_engine.jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (status == JNI_EDETACHED) {
+        g_engine.jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    } else {
+        attached = false;
+    }
+    return env;
+}
+
 class OboeAudioCallback : public oboe::AudioStreamCallback {
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream*, void* d, int32_t f) override {
         int16_t *o = (int16_t*)d;
-        size_t r = g_engine.audio_rb.read(o, f*2);
-        if (r < (size_t)f*2) memset(o+r, 0, (f*2-r)*2);
         if (g_engine.local_audio_muted.load()) {
             memset(o, 0, f * 2 * sizeof(int16_t));
+        } else {
+            size_t r = g_engine.audio_rb.read(o, f*2);
+            if (r < (size_t)f*2) memset(o+r, 0, (f*2-r)*2);
         }
-        g_engine.audio_cv.notify_one();
         return oboe::DataCallbackResult::Continue;
     }
 };
@@ -123,7 +130,7 @@ static bool setupOboeStream(int32_t sampleRate) {
 }
 
 static inline uint8_t clamp_uint8(int v) {
-    return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v);
+    return uint8_t(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
 void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
@@ -180,16 +187,21 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         }
     }
 
-    JNIEnv* env; g_engine.jvm->AttachCurrentThread(&env, nullptr);
-    env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid,
-        g_engine.argb_buf, (jint)w, (jint)h,
-        g_engine.i420_buf, (jint)w, (jint)(w / 2));
+    bool attached = false;
+    JNIEnv* env = getJniEnv(attached);
+    if (env) {
+        env->CallVoidMethod(g_engine.callback_obj, g_engine.on_frame_mid,
+            g_engine.argb_buf, (jint)w, (jint)h,
+            g_engine.i420_buf, (jint)w, (jint)(w / 2));
+        if (attached) g_engine.jvm->DetachCurrentThread();
+    }
 }
 
 static void sendAudioToJava(const int16_t *d, size_t f) {
     if (g_engine.audio_cb_obj && g_engine.audio_buf) {
-        JNIEnv* env;
-        g_engine.jvm->AttachCurrentThread(&env, nullptr);
+        bool attached = false;
+        JNIEnv* env = getJniEnv(attached);
+        if (!env) return;
         size_t bytes = f * 2 * sizeof(int16_t);
         jsize cap = env->GetDirectBufferCapacity(g_engine.audio_buf);
         if ((jsize)bytes <= cap) {
@@ -197,6 +209,7 @@ static void sendAudioToJava(const int16_t *d, size_t f) {
             memcpy(buf_ptr, d, bytes);
             env->CallVoidMethod(g_engine.audio_cb_obj, g_engine.on_audio_mid, g_engine.audio_buf, (jint)(f * 2));
         }
+        if (attached) g_engine.jvm->DetachCurrentThread();
     }
 }
 
@@ -208,22 +221,45 @@ size_t audio_batch_cb(const int16_t *d, size_t f) {
 
     size_t needed = f * 2;
     while (g_engine.audio_rb.available_to_write() < needed && g_engine.emu_running) {
-        std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     if (!g_engine.emu_running) return 0;
     g_engine.audio_rb.write(d, needed);
     sendAudioToJava(d, f);
     return f;
 }
-int16_t input_state_cb(unsigned p, unsigned d, unsigned i, unsigned id) { return (p==0 && d==RETRO_DEVICE_JOYPAD) ? ((g_engine.input_state.load() & (1<<id))?1:0) : (int16_t)0; }
+int16_t input_state_cb(unsigned p, unsigned d, unsigned i, unsigned id) {
+    return (p == 0 && d == RETRO_DEVICE_JOYPAD)
+        ? ((g_engine.input_state.load() & (1 << id)) ? 1 : 0)
+        : 0;
+}
 bool env_cb(unsigned cmd, void *data) {
     switch (cmd) {
-        case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: { retro_pixel_format pf = *(const retro_pixel_format *)data; g_engine.pixel_fmt.store(pf); LOGI("SET_PIXEL_FORMAT: %d (0=0RGB1555, 1=XRGB8888, 2=RGB565)", pf); return true; }
-        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE: ((struct retro_log_callback *)data)->log = libretro_log; return true;
-        case RETRO_ENVIRONMENT_GET_VARIABLE: { auto *v = (struct retro_variable *)data; if (v->key && strcmp(v->key, "mgba_color_correction") == 0) { v->value = "GBA"; return true; } return false; }
-        case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY: *(const char**)data = g_engine.system_dir.c_str(); return true;
-        case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY: *(const char**)data = g_engine.save_dir.c_str(); return true;
-        case RETRO_ENVIRONMENT_GET_CAN_DUPE: *(bool*)data = true; return true;
+        case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT: {
+            auto pf = *(const retro_pixel_format *)data;
+            g_engine.pixel_fmt.store(pf);
+            LOGI("SET_PIXEL_FORMAT: %d (0=0RGB1555, 1=XRGB8888, 2=RGB565)", pf);
+            return true;
+        }
+        case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
+            ((retro_log_callback *)data)->log = libretro_log;
+            return true;
+        case RETRO_ENVIRONMENT_GET_VARIABLE: {
+            auto v = (retro_variable *)data;
+            if (v->key && strcmp(v->key, "mgba_color_correction") == 0) {
+                v->value = "GBA"; return true;
+            }
+            return false;
+        }
+        case RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY:
+            *(const char**)data = g_engine.system_dir.c_str();
+            return true;
+        case RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY:
+            *(const char**)data = g_engine.save_dir.c_str();
+            return true;
+        case RETRO_ENVIRONMENT_GET_CAN_DUPE:
+            *(bool*)data = true;
+            return true;
     }
     return false;
 }
@@ -233,11 +269,20 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env,
     LOGI("=== init() called ===");
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.core_handle = dlopen(p, RTLD_LAZY); env->ReleaseStringUTFChars(path, p);
     LOGI("init: dlopen(%s) = %p", p, g_engine.core_handle);
-    ((retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment"))(env_cb);
-    ((retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh"))(video_refresh_cb);
-    ((retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch"))(audio_batch_cb);
-    ((retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state"))(input_state_cb);
-    ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
+    if (!g_engine.core_handle) { LOGE("init: dlopen failed"); return; }
+    auto setEnv = (retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment");
+    auto setVideo = (retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh");
+    auto setAudio = (retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch");
+    auto setInput = (retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state");
+    auto setPoll = (retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll");
+    if (!setEnv || !setVideo || !setAudio || !setInput || !setPoll) {
+        LOGE("init: missing required core symbols"); return;
+    }
+    setEnv(env_cb);
+    setVideo(video_refresh_cb);
+    setAudio(audio_batch_cb);
+    setInput(input_state_cb);
+    setPoll([](){});
     g_engine.get_mem_data = (decltype(g_engine.get_mem_data))dlsym(g_engine.core_handle, "retro_get_memory_data");
     g_engine.get_mem_size = (decltype(g_engine.get_mem_size))dlsym(g_engine.core_handle, "retro_get_memory_size");
     g_engine.state_size = (decltype(g_engine.state_size))dlsym(g_engine.core_handle, "retro_serialize_size");
@@ -247,24 +292,45 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_init(JNIEnv* env,
     LOGI("init: done (retro_init deferred to loadGame)");
 }
 
-JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) { const char *s1 = env->GetStringUTFChars(sys,0), *s2 = env->GetStringUTFChars(sav,0); g_engine.system_dir = s1; g_engine.save_dir = s2; env->ReleaseStringUTFChars(sys,s1); env->ReleaseStringUTFChars(sav,s2); }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* env, jobject, jstring sys, jstring sav) {
+    const char *s1 = env->GetStringUTFChars(sys, 0);
+    const char *s2 = env->GetStringUTFChars(sav, 0);
+    g_engine.system_dir = s1;
+    g_engine.save_dir = s2;
+    env->ReleaseStringUTFChars(sys, s1);
+    env->ReleaseStringUTFChars(sav, s2);
+}
+
+static void registerCoreCallbacks() {
+    if (!g_engine.core_handle) return;
+    auto setEnv = (retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment");
+    auto setVideo = (retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh");
+    auto setAudio = (retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch");
+    auto setInput = (retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state");
+    auto setPoll = (retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll");
+    if (setEnv) setEnv(env_cb);
+    if (setVideo) setVideo(video_refresh_cb);
+    if (setAudio) setAudio(audio_batch_cb);
+    if (setInput) setInput(input_state_cb);
+    if (setPoll) setPoll([](){});
+}
+
+static std::string getSavePath() {
+    return g_engine.save_dir + "/" +
+        g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+}
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_saveSram(JNIEnv*, jobject) {
     if (!g_engine.get_mem_data || g_engine.rom_path.empty()) { LOGE("saveSram: no mem_data or rom_path empty"); return; }
     std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
-    void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM); size_t s = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
+    void* d = g_engine.get_mem_data(0); size_t s = g_engine.get_mem_size(0);
     if (d && s > 0) {
-        std::string p = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+        std::string p = getSavePath();
         mkdir(g_engine.save_dir.c_str(), 0777);
         std::ofstream f(p, std::ios::binary);
         if (f.is_open()) { f.write((const char*)d, s); f.close(); LOGI("saveSram: wrote %zu bytes to %s", s, p.c_str()); }
         else { LOGE("saveSram: failed to open %s for writing", p.c_str()); }
     } else { LOGE("saveSram: mem_data=%p size=%zu", d, s); }
-}
-
-JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getStateSize(JNIEnv*, jobject) {
-    if (!g_engine.state_size) return 0;
-    return (jint)g_engine.state_size();
 }
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_saveState(JNIEnv* env, jobject, jstring path) {
@@ -306,65 +372,74 @@ JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadState(JNI
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
     LOGI("loadGame called");
-    ((retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment"))(env_cb);
-    ((retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh"))(video_refresh_cb);
-    ((retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch"))(audio_batch_cb);
-    ((retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state"))(input_state_cb);
-    ((retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll"))([](){});
+    registerCoreCallbacks();
     auto retro_init_fn = (void (*)())dlsym(g_engine.core_handle, "retro_init");
     if (retro_init_fn) retro_init_fn();
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;
-    struct retro_game_info info = { p, nullptr, 0, nullptr }; bool ok = ((bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game"))(&info);
+    auto loadGameFn = (bool (*)(const struct retro_game_info*))dlsym(g_engine.core_handle, "retro_load_game");
+    retro_game_info info = { p, nullptr, 0, nullptr };
+    bool ok = loadGameFn ? loadGameFn(&info) : false;
     LOGI("loadGame: retro_load_game returned %d", ok);
     if (ok) {
-        auto get_av = (void (*)(struct retro_system_av_info*))dlsym(g_engine.core_handle, "retro_get_system_av_info");
+        auto get_av = (void (*)(retro_system_av_info*))dlsym(g_engine.core_handle, "retro_get_system_av_info");
         if (get_av) {
-            struct retro_system_av_info av;
+            retro_system_av_info av;
             get_av(&av);
             g_engine.av_fps = av.timing.fps;
             g_engine.av_sample_rate = av.timing.sample_rate;
             LOGI("loadGame: fps=%.4f, sample_rate=%.0f", g_engine.av_fps, g_engine.av_sample_rate);
         }
         setupOboeStream((int32_t)g_engine.av_sample_rate);
-        std::string sp = g_engine.save_dir + "/" + g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
+        std::string sp = getSavePath();
         std::ifstream f(sp, std::ios::binary);
         if (f.is_open()) {
             std::lock_guard<std::recursive_mutex> lk(g_engine.core_mutex);
-            void* d = g_engine.get_mem_data(RETRO_MEMORY_SAVE_RAM);
-            size_t sz = g_engine.get_mem_size(RETRO_MEMORY_SAVE_RAM);
-            if (d) { f.read((char*)d, sz); LOGI("loadGame: read save %zu bytes from %s", f.gcount(), sp.c_str()); }
-            else { LOGE("loadGame: get_mem_data returned null"); }
+            void* d = g_engine.get_mem_data(0);
+            size_t sz = g_engine.get_mem_size(0);
+            if (d && sz > 0) {
+                f.read((char*)d, sz);
+                if (f.gcount() == (std::streamsize)sz) {
+                    LOGI("loadGame: read save %zu bytes from %s", sz, sp.c_str());
+                } else {
+                    LOGE("loadGame: truncated save file, read %zu of %zu", f.gcount(), sz);
+                }
+            } else { LOGE("loadGame: get_mem_data returned null"); }
             f.close();
         } else { LOGI("loadGame: no save file at %s", sp.c_str()); }
     }
-    env->ReleaseStringUTFChars(path, p); g_engine.core_run = (retro_run_t)dlsym(g_engine.core_handle, "retro_run"); LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
+    env->ReleaseStringUTFChars(path, p);
+    g_engine.core_run = (retro_run_t)(g_engine.core_handle ? dlsym(g_engine.core_handle, "retro_run") : nullptr);
+    LOGI("loadGame: core_run = %p", g_engine.core_run); return ok;
 }
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_start(JNIEnv*, jobject) {
     g_engine.emu_running = true;
     g_engine.emu_thread = std::thread([]{
-        auto frame_duration = std::chrono::duration<double, std::nano>(1.0 / g_engine.av_fps * 1e9);
-        auto start_time = std::chrono::steady_clock::now();
-        uint64_t frame_count = 0;
+        auto frame_duration = std::chrono::nanoseconds((long long)(1.0 / g_engine.av_fps * 1e9));
+        auto next_frame = std::chrono::steady_clock::now();
         while (g_engine.emu_running) {
             {
                 std::lock_guard<std::recursive_mutex> l(g_engine.core_mutex);
                 if (g_engine.core_run) g_engine.core_run();
             }
-            frame_count++;
-            auto expected_end = start_time + frame_duration * frame_count;
+            next_frame += frame_duration;
             auto now = std::chrono::steady_clock::now();
-            if (now < expected_end) {
-                std::this_thread::sleep_for(expected_end - now);
+            if (now < next_frame) {
+                std::this_thread::sleep_for(next_frame - now);
             }
         }
     });
 }
 
-JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_stop(JNIEnv*, jobject) { g_engine.emu_running = false; g_engine.audio_cv.notify_all(); if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join(); }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_stop(JNIEnv*, jobject) {
+    g_engine.emu_running = false;
+    if (g_engine.emu_thread.joinable()) g_engine.emu_thread.join();
+}
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_unloadGame(JNIEnv*, jobject) {
     LOGI("=== unloadGame() called ===");
+    g_engine.emu_running = false;
+    if(g_engine.emu_thread.joinable()) g_engine.emu_thread.join();
     if (g_engine.core_handle) {
         auto retro_unload_game = (void (*)())dlsym(g_engine.core_handle, "retro_unload_game");
         if (retro_unload_game) retro_unload_game();
@@ -424,8 +499,11 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setAudioCallback(
     }
 }
 
-JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) { LOGI("setInputState: %d", s); g_engine.input_state = (uint16_t)s; }
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setInputState(JNIEnv*, jobject, jint s) {
+    g_engine.input_state = (uint16_t)s;
+}
 
-JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) { return (jint)g_engine.av_sample_rate; }
-JNIEXPORT jstring JNICALL Java_com_retrocast_emulator_NativeRetro_getCoreVersion(JNIEnv* env, jobject) { return env->NewStringUTF("Zenith Engine v5.0"); }
+JNIEXPORT jint JNICALL Java_com_retrocast_emulator_NativeRetro_getSampleRate(JNIEnv*, jobject) {
+    return (jint)g_engine.av_sample_rate;
+}
 }

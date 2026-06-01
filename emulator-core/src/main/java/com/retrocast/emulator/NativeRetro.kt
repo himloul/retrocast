@@ -18,7 +18,6 @@ class NativeRetro {
     }
 
     external fun getSampleRate(): Int
-    external fun getCoreVersion(): String
 
     external fun init(corePath: String)
 
@@ -52,8 +51,6 @@ class NativeRetro {
     external fun setPaths(systemPath: String, savePath: String)
 
     external fun saveSram()
-
-    external fun getStateSize(): Int
 
     external fun saveState(path: String): Boolean
 

@@ -41,12 +41,13 @@ import com.retrocast.emulator.NativeRetro
 import com.retrocast.streaming.LibretroVideoCapturer
 import com.retrocast.streaming.I420BufferPool
 import com.retrocast.streaming.StreamingManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.webrtc.*
 import java.io.File
 import android.os.Handler
-
 import android.os.Looper
 import java.nio.ByteBuffer
 import com.google.zxing.BarcodeFormat
@@ -63,6 +64,13 @@ import androidx.compose.ui.layout.ContentScale
 import android.graphics.Bitmap
 
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
+    companion object {
+        private const val SIGNALING_PORT = 8080
+        private const val SAVE_INTERVAL_MS = 30000L
+        private const val MAX_PIXELS = 512 * 512
+        private const val AUDIO_BUFFER_SIZE = 16384
+    }
+
     private lateinit var hapticManager: HapticFeedbackManager
     private lateinit var nativeRetro: NativeRetro
     @Volatile
@@ -94,7 +102,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             if (isCoreReady) {
                 nativeRetro.saveSram()
             }
-            saveHandler.postDelayed(this, 30000)
+            saveHandler.postDelayed(this, SAVE_INTERVAL_MS)
         }
     }
 
@@ -145,31 +153,32 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         videoCapturer.onFrameCaptured(frame)
     }
 
+    private fun enterImmersiveMode() {
+        @Suppress("DEPRECATION")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.apply {
+                hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
+                systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            )
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.decorView.post {
-            @Suppress("DEPRECATION")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                window.setDecorFitsSystemWindows(false)
-                window.insetsController?.apply {
-                    hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
-                    systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                }
-            } else {
-                window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-                window.decorView.systemUiVisibility = (
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                )
-            }
-        }
+        window.decorView.post { enterImmersiveMode() }
         hapticManager = HapticFeedbackManager(this)
         nativeRetro = NativeRetro()
         
-        val maxPixels = 512 * 512
-        pixelBuffer = ByteBuffer.allocateDirect(maxPixels * 4)
-        i420Buffer = ByteBuffer.allocateDirect(maxPixels * 3 / 2)
+        pixelBuffer = ByteBuffer.allocateDirect(MAX_PIXELS * 4)
+        i420Buffer = ByteBuffer.allocateDirect(MAX_PIXELS * 3 / 2)
 
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
         dm.registerDisplayListener(displayListener, null)
@@ -365,6 +374,41 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 
     private val romPickerLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { loadRomFromUri(it) } }
 
+    private suspend fun initAndLoadRom(romFile: File): Boolean {
+        val extension = romFile.name.substringAfterLast('.', "").lowercase()
+        val coreName = when (extension) { "gba" -> "mgba_libretro_android.so"; else -> null } ?: return false
+        val coreFile = File(filesDir, coreName)
+        if (!coreFile.exists()) {
+            isDownloading = true
+            val success = CoreDownloader.downloadCore(coreName, filesDir)
+            isDownloading = false
+            if (!success) return false
+        }
+        if (!coreFile.exists()) return false
+
+        shutdownGame()
+        val systemDir = File(filesDir, "system").apply { mkdirs() }
+        val saveDir = File(filesDir, "saves").apply { mkdirs() }
+        nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
+
+        if (!isCoreInitialized) {
+            nativeRetro.init(coreFile.absolutePath)
+            if (pixelBuffer != null && i420Buffer != null) {
+                nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
+            }
+            audioBuffer = ByteBuffer.allocateDirect(AUDIO_BUFFER_SIZE)
+            audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
+            isCoreInitialized = true
+        }
+        if (nativeRetro.loadGame(romFile.absolutePath)) {
+            loadedRomPath = romFile.absolutePath
+            isCoreReady = true
+            nativeRetro.start()
+            return true
+        }
+        return false
+    }
+
     private fun loadRomFromUri(uri: Uri) {
         lifecycleScope.launch {
             try {
@@ -381,44 +425,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     val extracted = extractRomFromZip(outputFile)
                     if (extracted != null) { romFile = extracted } else { return@launch }
                 }
-                val extension = romFile.name.substringAfterLast('.', "").lowercase()
-                val coreName = when (extension) { "gba" -> "mgba_libretro_android.so"; else -> null }
-                if (coreName == null) return@launch
-                val coreFile = File(filesDir, coreName)
-                if (!coreFile.exists()) {
-                    isDownloading = true
-                    val success = CoreDownloader.downloadCore(coreName, filesDir)
-                    isDownloading = false
-                    if (!success) return@launch
-                }
-                if (coreFile.exists()) {
-                    if (isCoreReady) {
-                        nativeRetro.stop()
-                        nativeRetro.saveSram()
-                        nativeRetro.unloadGame()
-                        isCoreReady = false
-                        loadedRomPath = null
-                    }
-
-                    val systemDir = File(filesDir, "system").apply { mkdirs() }
-                    val saveDir = File(filesDir, "saves").apply { mkdirs() }
-                    nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
-
-                    if (!isCoreInitialized) {
-                        nativeRetro.init(coreFile.absolutePath)
-                        if (pixelBuffer != null && i420Buffer != null) {
-                            nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
-                        }
-                        audioBuffer = ByteBuffer.allocateDirect(16384)
-                        audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
-                        isCoreInitialized = true
-                    }
-                    if (nativeRetro.loadGame(romFile.absolutePath)) {
-                        loadedRomPath = romFile.absolutePath
-                        isCoreReady = true
-                        nativeRetro.start()
-                        refreshRomLibrary()
-                    }
+                if (initAndLoadRom(romFile)) {
+                    refreshRomLibrary()
                 }
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Failed to load ROM", e)
@@ -434,44 +442,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private fun loadLocalRom(romFile: File) {
         lifecycleScope.launch {
             try {
-                val extension = romFile.name.substringAfterLast('.', "").lowercase()
-                val coreName = when (extension) { "gba" -> "mgba_libretro_android.so"; else -> null }
-                if (coreName == null) return@launch
-                val coreFile = File(filesDir, coreName)
-                if (!coreFile.exists()) {
-                    isDownloading = true
-                    val success = CoreDownloader.downloadCore(coreName, filesDir)
-                    isDownloading = false
-                    if (!success) return@launch
-                }
-                if (coreFile.exists()) {
-                    if (isCoreReady) {
-                        nativeRetro.stop()
-                        nativeRetro.saveSram()
-                        nativeRetro.unloadGame()
-                        isCoreReady = false
-                        loadedRomPath = null
-                    }
-
-                    val systemDir = File(filesDir, "system").apply { mkdirs() }
-                    val saveDir = File(filesDir, "saves").apply { mkdirs() }
-                    nativeRetro.setPaths(systemDir.absolutePath, saveDir.absolutePath)
-
-                    if (!isCoreInitialized) {
-                        nativeRetro.init(coreFile.absolutePath)
-                        if (pixelBuffer != null && i420Buffer != null) {
-                            nativeRetro.setCallback(this@MainActivity, pixelBuffer, i420Buffer)
-                        }
-                        audioBuffer = ByteBuffer.allocateDirect(16384)
-                        audioBuffer?.let { nativeRetro.setAudioCallback(this@MainActivity, it) }
-                        isCoreInitialized = true
-                    }
-                    if (nativeRetro.loadGame(romFile.absolutePath)) {
-                        loadedRomPath = romFile.absolutePath
-                        isCoreReady = true
-                        nativeRetro.start()
-                    }
-                }
+                initAndLoadRom(romFile)
             } catch (e: Exception) {
                 android.util.Log.e("MainActivity", "Failed to load local ROM", e)
             }
@@ -514,63 +485,73 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         }
     }
 
+    private fun shutdownGame() {
+        if (!isCoreReady) return
+        nativeRetro.stop()
+        nativeRetro.saveSram()
+        nativeRetro.unloadGame()
+        isCoreReady = false
+        loadedRomPath = null
+    }
+
     private fun resetGame() {
-        if (isCoreReady) {
-            val rom = loadedRomPath ?: return
-            nativeRetro.stop()
-            nativeRetro.saveSram()
-            nativeRetro.unloadGame()
-            isCoreReady = false
-            loadedRomPath = null
-            if (nativeRetro.loadGame(rom)) {
-                loadedRomPath = rom
-                isCoreReady = true
-                nativeRetro.start()
-            }
+        if (!isCoreReady) return
+        val rom = loadedRomPath ?: return
+        shutdownGame()
+        if (nativeRetro.loadGame(rom)) {
+            loadedRomPath = rom
+            isCoreReady = true
+            nativeRetro.start()
         }
     }
 
     private fun quitGame() {
-        if (isCoreReady) {
-            nativeRetro.stop()
-            nativeRetro.saveSram()
-            nativeRetro.unloadGame()
-            isCoreReady = false
-            loadedRomPath = null
-        }
+        shutdownGame()
     }
 
     private fun toggleCasting() {
         if (isCasting) {
             nativeRetro.setLocalAudioMuted(false)
-            signalingServer?.stop(); signalingServer = null; streamingManager?.dispose(); streamingManager = null; isCasting = false; castUrl = ""
+            signalingServer?.stop()
+            signalingServer = null
+            streamingManager?.dispose()
+            streamingManager = null
+            isCasting = false
+            castUrl = ""
         } else {
-            val ip = NetworkUtils.getLocalIpAddress(this); val port = 8080
-            if (ip == null) { Toast.makeText(this, "Connect to WiFi to cast", Toast.LENGTH_SHORT).show(); return }
-            castUrl = "http://$ip:$port"
-            val sm = StreamingManager(this).also { streamingManager = it }
-
-            sm.createPeerConnection(object : PeerConnection.Observer {
-                override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
-                override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
-                override fun onIceConnectionReceivingChange(p0: Boolean) {}
-                override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
-                override fun onIceCandidate(candidate: IceCandidate?) {
-                    candidate?.let {
-                        val json = JSONObject().apply { put("sdpMid", it.sdpMid); put("sdpMLineIndex", it.sdpMLineIndex); put("candidate", it.sdp) }
-                        lifecycleScope.launch { signalingServer?.sendMessage(json.toString()) }
+            lifecycleScope.launch(Dispatchers.Default) {
+                val ip = NetworkUtils.getLocalIpAddress(this@MainActivity)
+                if (ip == null) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "Connect to WiFi to cast", Toast.LENGTH_SHORT).show()
                     }
+                    return@launch
                 }
-                override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
-                override fun onAddStream(p0: MediaStream?) {}
-                override fun onRemoveStream(p0: MediaStream?) {}
-                override fun onDataChannel(p0: DataChannel?) {}
-                override fun onRenegotiationNeeded() {}
-                override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
-            })
-            sm.startStreaming(videoCapturer)
-            signalingServer = SignalingServer(this, port).apply {
-                start(
+                val port = SIGNALING_PORT
+
+                val sm = StreamingManager(this@MainActivity)
+                sm.createPeerConnection(object : PeerConnection.Observer {
+                    override fun onSignalingChange(p0: PeerConnection.SignalingState?) {}
+                    override fun onIceConnectionChange(p0: PeerConnection.IceConnectionState?) {}
+                    override fun onIceConnectionReceivingChange(p0: Boolean) {}
+                    override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {}
+                    override fun onIceCandidate(candidate: IceCandidate?) {
+                        candidate?.let {
+                            val json = JSONObject().apply { put("sdpMid", it.sdpMid); put("sdpMLineIndex", it.sdpMLineIndex); put("candidate", it.sdp) }
+                            lifecycleScope.launch { signalingServer?.sendMessage(json.toString()) }
+                        }
+                    }
+                    override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {}
+                    override fun onAddStream(p0: MediaStream?) {}
+                    override fun onRemoveStream(p0: MediaStream?) {}
+                    override fun onDataChannel(p0: DataChannel?) {}
+                    override fun onRenegotiationNeeded() {}
+                    override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
+                })
+                sm.startStreaming(videoCapturer)
+
+                val server = SignalingServer(this@MainActivity, port)
+                server.start(
                     onClientConnected = {
                         sm.createOffer { offer ->
                             offer?.let {
@@ -594,9 +575,15 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                         }
                     }
                 )
+
+                withContext(Dispatchers.Main) {
+                    streamingManager = sm
+                    signalingServer = server
+                    castUrl = "http://$ip:$port"
+                    isCasting = true
+                    nativeRetro.setLocalAudioMuted(true)
+                }
             }
-            isCasting = true
-            nativeRetro.setLocalAudioMuted(true)
         }
     }
 
@@ -611,27 +598,17 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         super.onDestroy()
         saveHandler.removeCallbacks(saveRunnable)
         val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        dm.unregisterDisplayListener(displayListener); nativePresentation?.dismiss()
-        if (isCoreReady) nativeRetro.stop()
-        if (isCoreInitialized) nativeRetro.unloadGame()
-        signalingServer?.stop(); streamingManager?.dispose()
+        dm.unregisterDisplayListener(displayListener)
+        nativePresentation?.dismiss()
+        shutdownGame()
+        signalingServer?.stop()
+        streamingManager?.dispose()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            window.decorView.post {
-                @Suppress("DEPRECATION")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    window.insetsController?.hide(android.view.WindowInsets.Type.statusBars() or android.view.WindowInsets.Type.navigationBars())
-                } else {
-                    window.decorView.systemUiVisibility = (
-                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                        or View.SYSTEM_UI_FLAG_FULLSCREEN
-                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    )
-                }
-            }
+            window.decorView.post { enterImmersiveMode() }
         }
     }
 
