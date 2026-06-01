@@ -125,6 +125,11 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             nativePresentation = null
             isNativeDisplayConnected = false
         }
+        updateLocalDisplayState()
+    }
+
+    private fun updateLocalDisplayState() {
+        nativeRetro.setLocalDisplayActive(!isCasting || nativePresentation != null)
     }
 
     override fun onAudioReady(buffer: ByteBuffer, samples: Int) {
@@ -132,7 +137,9 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     }
 
     override fun onFrameReady(pixels: ByteBuffer, width: Int, height: Int) {
-        try { emulatorView?.setFrame(pixels, width, height) } catch (_: Exception) {}
+        if (!isCasting) {
+            try { emulatorView?.setFrame(pixels, width, height) } catch (_: Exception) {}
+        }
         try { nativePresentation?.setFrame(pixels, width, height) } catch (_: Exception) {}
         if (!isCasting) return
 
@@ -503,6 +510,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             streamingManager = null
             isCasting = false
             castUrl = ""
+            updateLocalDisplayState()
         } else {
             lifecycleScope.launch(Dispatchers.Default) {
                 val ip = NetworkUtils.getLocalIpAddress(this@MainActivity)
@@ -568,6 +576,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     streamingManager = sm
                     castUrl = "http://$ip:$port"
                     isCasting = true
+                    updateLocalDisplayState()
                     nativeRetro.setCasting(true)
                     nativeRetro.setLocalAudioMuted(true)
                 }

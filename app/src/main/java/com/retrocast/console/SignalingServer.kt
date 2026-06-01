@@ -81,12 +81,12 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                          let audioQueue = [];
                                          let audioPlaying = false;
 
-                                         function scheduleAudioQueue() {
-                                             audioPlaying = true;
-                                             const now = audioCtx.currentTime;
-                                             if (audioScheduledTime < now + 0.05 || audioScheduledTime - now > 0.5) {
-                                                 audioScheduledTime = now + 0.1;
-                                             }
+                                          function scheduleAudioQueue() {
+                                              audioPlaying = true;
+                                              const now = audioCtx.currentTime;
+                                              if (audioScheduledTime < now - 0.005 || audioScheduledTime - now > 0.5) {
+                                                  audioScheduledTime = now + 0.02;
+                                              }
                                              while (audioQueue.length > 0) {
                                                  const buf = audioQueue.shift();
                                                  const src = audioCtx.createBufferSource();
@@ -125,8 +125,8 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                                                  left[i] = pcm[i * 2] / 32768;
                                                                  right[i] = pcm[i * 2 + 1] / 32768;
                                                              }
-                                                             audioQueue.push(buffer);
-                                                             if (audioQueue.length >= 3 && !audioPlaying) scheduleAudioQueue();
+                                                              audioQueue.push(buffer);
+                                                              if (audioQueue.length >= 1 && !audioPlaying) scheduleAudioQueue();
                                                          } catch (err) {
                                                              console.error('Audio error:', err);
                                                          }

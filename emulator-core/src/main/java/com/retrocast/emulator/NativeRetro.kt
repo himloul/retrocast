@@ -59,4 +59,6 @@ class NativeRetro {
     external fun fillI420Buffer(yBuf: ByteBuffer, uBuf: ByteBuffer, vBuf: ByteBuffer, width: Int, height: Int, yStride: Int, uvStride: Int)
 
     external fun setCasting(casting: Boolean)
+
+    external fun setLocalDisplayActive(active: Boolean)
 }

@@ -8,7 +8,6 @@ import java.nio.ByteBuffer
 
 class StreamingManager(private val context: Context) {
     companion object {
-        private const val STUN_URL = "stun:stun.l.google.com:19302"
         private const val MAX_BITRATE_BPS = 20_000_000
         private const val MIN_BITRATE_BPS = 5_000_000
         private const val MAX_FRAMERATE = 60
@@ -37,7 +36,6 @@ class StreamingManager(private val context: Context) {
     private var peerConnection: PeerConnection? = null
     private var videoSource: VideoSource? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
-    private val audioBuf = ByteBuffer.allocateDirect(MAX_AUDIO_BYTES)
     @Volatile
     private var audioDataChannel: DataChannel? = null
 
@@ -59,12 +57,8 @@ class StreamingManager(private val context: Context) {
     }
 
     fun createPeerConnection(observer: PeerConnection.Observer) {
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder(STUN_URL).createIceServer()
-        )
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
         }
         peerConnection = peerConnectionFactory?.createPeerConnection(rtcConfig, observer)
@@ -78,10 +72,11 @@ class StreamingManager(private val context: Context) {
         videoTrack?.setEnabled(true)
 
         peerConnection?.addTrack(videoTrack, listOf("STREAM"))
-        configureBitrate()
-        videoSource?.adaptOutputFormat(240, 160, MAX_FRAMERATE)
 
-        audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init())
+        audioDataChannel = peerConnection?.createDataChannel("audio", DataChannel.Init().apply {
+            ordered = false
+            maxRetransmits = 0
+        })
     }
 
     private fun configureBitrate() {
@@ -105,7 +100,7 @@ class StreamingManager(private val context: Context) {
     }
 
     private fun createEncoderFactory(): VideoEncoderFactory =
-        PrioritizedVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
+        DefaultVideoEncoderFactory(rootEglBase.eglBaseContext, true, true)
 
     fun createOffer(callback: (SessionDescription?) -> Unit) {
         val constraints = MediaConstraints().apply {
@@ -118,7 +113,7 @@ class StreamingManager(private val context: Context) {
                 sdp?.let {
                     peerConnection?.setLocalDescription(object : SdpObserver {
                         override fun onCreateSuccess(p0: SessionDescription?) {}
-                        override fun onSetSuccess() { callback(it) }
+                        override fun onSetSuccess() { configureBitrate(); callback(it) }
                         override fun onCreateFailure(p0: String?) {}
                         override fun onSetFailure(p0: String?) { callback(null) }
                     }, it)
@@ -144,11 +139,8 @@ class StreamingManager(private val context: Context) {
         buffer.rewind()
         val len = samples * 2
         if (len > MAX_AUDIO_BYTES) return
-        audioBuf.clear()
         buffer.limit(len)
-        audioBuf.put(buffer)
-        audioBuf.flip()
-        if (!dc.send(DataChannel.Buffer(audioBuf, true))) {
+        if (!dc.send(DataChannel.Buffer(buffer, true))) {
             Log.w("StreamingManager", "audio DataChannel send returned false")
         }
     }
@@ -165,36 +157,5 @@ class StreamingManager(private val context: Context) {
         audioDeviceModule?.release()
         peerConnectionFactory?.dispose()
         rootEglBase.release()
-    }
-}
-
-private class PrioritizedVideoEncoderFactory(
-    eglContext: EglBase.Context,
-    enableIntelVp8Encoder: Boolean,
-    enableH264HighProfile: Boolean
-) : VideoEncoderFactory {
-
-    private val hardwareFactory = HardwareVideoEncoderFactory(
-        eglContext, enableIntelVp8Encoder, enableH264HighProfile
-    )
-    private val softwareFactory = SoftwareVideoEncoderFactory()
-
-    override fun createEncoder(info: VideoCodecInfo): VideoEncoder? {
-        return hardwareFactory.createEncoder(info) ?: softwareFactory.createEncoder(info)
-    }
-
-    override fun getSupportedCodecs(): Array<VideoCodecInfo> {
-        val hw = hardwareFactory.supportedCodecs
-        val sw = softwareFactory.supportedCodecs
-        val seen = mutableSetOf<String>()
-        val result = mutableListOf<VideoCodecInfo>()
-        for (name in listOf("VP9", "H264", "VP8")) {
-            for (codec in hw + sw) {
-                if (codec.name == name && seen.add(name)) {
-                    result.add(codec)
-                }
-            }
-        }
-        return result.toTypedArray()
     }
 }

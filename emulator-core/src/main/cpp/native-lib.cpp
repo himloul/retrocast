@@ -67,6 +67,7 @@ struct ZenithEngine {
     serialize_fn state_serialize = nullptr;
     unserialize_fn state_unserialize = nullptr;
     std::atomic<bool> is_casting{false};
+    std::atomic<bool> local_display_active{true};
     std::vector<uint8_t> raw_frame_buf;
     unsigned last_w = 0, last_h = 0;
     size_t last_pitch = 0;
@@ -148,35 +149,37 @@ void video_refresh_cb(const void *data, unsigned w, unsigned h, size_t pitch) {
         g_engine.current_frame_data = (const uint8_t*)data;
     }
 
-    uint8_t* argb = g_engine.argb_ptr;
-    const uint8_t* raw = (const uint8_t*)data;
+    if (!g_engine.is_casting.load() || g_engine.local_display_active.load()) {
+        uint8_t* argb = g_engine.argb_ptr;
+        const uint8_t* raw = (const uint8_t*)data;
 
-    for (unsigned y = 0; y < h; y++) {
-        if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
-            const uint32_t* src = (const uint32_t*)(raw + y * pitch);
-            uint32_t* dst = (uint32_t*)(argb + y * w * 4);
-            unsigned x = 0;
+        for (unsigned y = 0; y < h; y++) {
+            if (fmt == RETRO_PIXEL_FORMAT_XRGB8888) {
+                const uint32_t* src = (const uint32_t*)(raw + y * pitch);
+                uint32_t* dst = (uint32_t*)(argb + y * w * 4);
+                unsigned x = 0;
 #if defined(__ARM_NEON)
-            uint32x4_t alpha = vdupq_n_u32(0xFF000000);
-            for (; x + 4 <= w; x += 4) {
-                vst1q_u32(dst + x, vorrq_u32(vld1q_u32(src + x), alpha));
-            }
+                uint32x4_t alpha = vdupq_n_u32(0xFF000000);
+                for (; x + 4 <= w; x += 4) {
+                    vst1q_u32(dst + x, vorrq_u32(vld1q_u32(src + x), alpha));
+                }
 #endif
-            for (; x < w; x++) {
-                dst[x] = src[x] | 0xFF000000;
-            }
-        } else {
-            const uint16_t* src = (const uint16_t*)(raw + y * pitch);
-            uint32_t* dst = (uint32_t*)(argb + y * w * 4);
-            for (unsigned x = 0; x < w; x++) {
-                uint16_t pix = src[x];
-                uint8_t R = (pix >> 11) & 0x1F;
-                uint8_t G = (pix >> 5) & 0x3F;
-                uint8_t B = pix & 0x1F;
-                R = (R << 3) | (R >> 2);
-                G = (G << 2) | (G >> 4);
-                B = (B << 3) | (B >> 2);
-                dst[x] = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
+                for (; x < w; x++) {
+                    dst[x] = src[x] | 0xFF000000;
+                }
+            } else {
+                const uint16_t* src = (const uint16_t*)(raw + y * pitch);
+                uint32_t* dst = (uint32_t*)(argb + y * w * 4);
+                for (unsigned x = 0; x < w; x++) {
+                    uint16_t pix = src[x];
+                    uint8_t R = (pix >> 11) & 0x1F;
+                    uint8_t G = (pix >> 5) & 0x3F;
+                    uint8_t B = pix & 0x1F;
+                    R = (R << 3) | (R >> 2);
+                    G = (G << 2) | (G >> 4);
+                    B = (B << 3) | (B >> 2);
+                    dst[x] = 0xFF000000 | ((uint32_t)B << 16) | ((uint32_t)G << 8) | (uint32_t)R;
+                }
             }
         }
     }
@@ -542,5 +545,9 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_fillI420Buffer(
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCasting(JNIEnv*, jobject, jboolean casting) {
     g_engine.is_casting.store(casting);
+}
+
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setLocalDisplayActive(JNIEnv*, jobject, jboolean active) {
+    g_engine.local_display_active.store(active);
 }
 }
