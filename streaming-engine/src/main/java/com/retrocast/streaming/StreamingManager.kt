@@ -12,6 +12,7 @@ class StreamingManager(private val context: Context) {
         private const val MAX_BITRATE_BPS = 5_000_000
         private const val MIN_BITRATE_BPS = 1_000_000
         private const val MAX_FRAMERATE = 60
+        private const val MAX_AUDIO_BYTES = 16384
     }
 
     private val rootEglBase: EglBase = EglBase.create()
@@ -19,6 +20,7 @@ class StreamingManager(private val context: Context) {
     private var peerConnection: PeerConnection? = null
     private var videoSource: VideoSource? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
+    private val audioBuf = ByteBuffer.allocateDirect(MAX_AUDIO_BYTES)
     @Volatile
     private var audioDataChannel: DataChannel? = null
 
@@ -126,11 +128,12 @@ class StreamingManager(private val context: Context) {
         val dc = audioDataChannel ?: return
         buffer.rewind()
         val len = samples * 2
-        val copy = ByteBuffer.allocateDirect(len)
+        if (len > MAX_AUDIO_BYTES) return
+        audioBuf.clear()
         buffer.limit(len)
-        copy.put(buffer)
-        copy.flip()
-        if (!dc.send(DataChannel.Buffer(copy, true))) {
+        audioBuf.put(buffer)
+        audioBuf.flip()
+        if (!dc.send(DataChannel.Buffer(audioBuf, true))) {
             Log.w("StreamingManager", "audio DataChannel send returned false")
         }
     }
