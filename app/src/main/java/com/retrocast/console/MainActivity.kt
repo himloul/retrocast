@@ -1,7 +1,5 @@
 package com.retrocast.console
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.hardware.display.DisplayManager
@@ -16,6 +14,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -31,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -43,6 +43,7 @@ import com.retrocast.streaming.LibretroVideoCapturer
 import com.retrocast.streaming.I420BufferPool
 import com.retrocast.streaming.StreamingManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -51,15 +52,12 @@ import java.io.File
 import android.os.Handler
 import android.os.Looper
 import java.nio.ByteBuffer
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
+
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
-
 import android.graphics.Bitmap
 
 class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro.AudioCallback {
@@ -83,6 +81,13 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var loadedRomPath by mutableStateOf<String?>(null)
     private var isDownloading by mutableStateOf(false)
     private var romFiles by mutableStateOf<List<File>>(emptyList())
+    private var showStats by mutableStateOf(false)
+    private var streamFps by mutableStateOf(0f)
+    private var streamBitrate by mutableStateOf(0)
+    private var streamAudioSent by mutableStateOf(0)
+    private val castFrameTimestamps = LongArray(30)
+    private var castTsIndex = 0
+    private var castTsCount = 0
 
     private var nativePresentation: GamePresentation? = null
     private var emulatorView: EmulatorView? = null
@@ -143,6 +148,20 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         try { nativePresentation?.setFrame(pixels, width, height) } catch (_: Exception) {}
         if (!isCasting) return
 
+        val frameNow = System.nanoTime()
+        castFrameTimestamps[castTsIndex] = frameNow
+        castTsIndex = (castTsIndex + 1) % castFrameTimestamps.size
+        if (castTsCount < castFrameTimestamps.size) castTsCount++
+        if (castTsCount >= 2) {
+            val newest = castFrameTimestamps[(castTsIndex - 1 + castFrameTimestamps.size) % castFrameTimestamps.size]
+            val oldest = castFrameTimestamps[(castTsIndex - castTsCount + castFrameTimestamps.size) % castFrameTimestamps.size]
+            val elapsed = newest - oldest
+            if (elapsed > 0) {
+                val fps = (castTsCount - 1).toFloat() / (elapsed / 1_000_000_000f)
+                if (fps.toInt() != streamFps.toInt()) streamFps = fps
+            }
+        }
+
         val yStride = width
         val uvStride = width / 2
         val buf = i420BufferPool.acquire(width, height, yStride, uvStride)
@@ -201,6 +220,27 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 if (loadedRomPath != null) drawerState.snapTo(DrawerValue.Closed)
             }
 
+            LaunchedEffect(showStats) {
+                emulatorView?.setShowStats(showStats)
+            }
+
+            LaunchedEffect(showStats, isCasting) {
+                android.util.Log.d("MainActivity", "StatsLaunchedEffect: showStats=$showStats isCasting=$isCasting sm=${streamingManager != null}")
+                if (showStats && isCasting && streamingManager != null) {
+                    var prevAudioSent = 0
+                    while (true) {
+                        try {
+                            streamingManager?.pollStats()
+                            streamBitrate = streamingManager?.getBitrateBps() ?: 0
+                            val cur = streamingManager?.getAudioSent() ?: 0
+                            streamAudioSent = (cur - prevAudioSent) / 2
+                            prevAudioSent = cur
+                        } catch (_: Exception) {}
+                        delay(2000)
+                    }
+                }
+            }
+
             MaterialTheme(colorScheme = colorScheme) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
@@ -213,6 +253,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.Save, null) }, label = { Text("Save") }, selected = false, onClick = { saveGame(); scope.launch { drawerState.close() } })
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.FolderOpen, null) }, label = { Text("Load") }, selected = false, onClick = { loadSramFromDisk(); scope.launch { drawerState.close() } })
                                 NavigationDrawerItem(icon = { Icon(Icons.Default.Refresh, null) }, label = { Text("Reset") }, selected = false, onClick = { resetGame(); scope.launch { drawerState.close() } })
+                                NavigationDrawerItem(icon = { if (showStats) Icon(Icons.Default.Check, "Stats active") }, label = { Text("Show Stats") }, selected = showStats, onClick = { showStats = !showStats })
                                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                                 NavigationDrawerItem(icon = { Icon(Icons.AutoMirrored.Filled.ExitToApp, null) }, label = { Text("Quit", color = MaterialTheme.colorScheme.error) }, selected = false, onClick = { shutdownGame(); scope.launch { drawerState.close() } })
                             }
@@ -296,7 +337,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
             }
             if (loadedRomPath != null) {
                 if (isCasting) {
-                    CastDashboard(castUrl = castUrl)
+                    CastDashboard(castUrl = castUrl, showStats = showStats, fps = streamFps, bitrateBps = streamBitrate, audioSent = streamAudioSent)
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = false)
                     }
@@ -334,7 +375,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         Box(modifier = Modifier.fillMaxSize()) {
             if (loadedRomPath != null) {
                 if (isCasting) {
-                    CastDashboard(castUrl = castUrl)
+                    CastDashboard(castUrl = castUrl, showStats = showStats, fps = streamFps, bitrateBps = streamBitrate, audioSent = streamAudioSent)
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         if (!isNativeDisplayConnected) {
@@ -542,6 +583,9 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {}
                 })
                 sm.startStreaming(videoCapturer)
+                sm.resetStats()
+                castTsIndex = 0; castTsCount = 0
+                withContext(Dispatchers.Main) { streamFps = 0f; streamBitrate = 0; streamAudioSent = 0 }
 
                 if (signalingServer == null) {
                     signalingServer = SignalingServer(this@MainActivity, port)
@@ -612,18 +656,27 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
 }
 
 @Composable
-fun CastDashboard(castUrl: String) {
+fun CastDashboard(castUrl: String, showStats: Boolean = false, fps: Float = 0f, bitrateBps: Int = 0, audioSent: Int = 0) {
     val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(castUrl, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            IconButton(onClick = {
-                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cb.setPrimaryClip(ClipData.newPlainText("Cast URL", castUrl))
-            }) { Icon(Icons.Default.ContentCopy, "Copy", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp)) }
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(castUrl, modifier = Modifier.clickable {
+            val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("Cast URL", castUrl))
+            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+        }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, fontFamily = FontFamily.Monospace)
+        if (showStats) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color.Black.copy(alpha = 0.6f)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("FPS: %.0f".format(fps), color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                    Text("Video: %d kbps".format(bitrateBps / 1000), color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                    Text("Audio: %d pkt/s".format(audioSent.coerceAtLeast(0)), color = Color.White, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
+                }
+            }
         }
-        Spacer(modifier = Modifier.height(16.dp))
-        QrCodeView(url = castUrl, modifier = Modifier.size(150.dp))
     }
 }
 
@@ -697,26 +750,4 @@ fun GameCard(rom: File, onClick: () -> Unit) {
     }
 }
 
-@Composable
-fun QrCodeView(url: String, modifier: Modifier = Modifier) {
-    val bmp = remember(url) {
-        try {
-            val matrix = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 256, 256)
-            val w = matrix.width; val h = matrix.height
-            val pixels = IntArray(w * h) { i ->
-                if (matrix[i % w, i / w]) -0x1000000 else 0
-            }
-            Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
-        } catch (e: Exception) {
-            null
-        }
-    }
-    if (bmp != null) {
-        Image(
-            bitmap = bmp.asImageBitmap(),
-            contentDescription = "QR Code",
-            modifier = modifier,
-            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onBackground)
-        )
-    }
-}
+

@@ -39,6 +39,59 @@ class StreamingManager(private val context: Context) {
     @Volatile
     private var audioDataChannel: DataChannel? = null
 
+    @Volatile
+    private var statsBitrateBps = 0
+    @Volatile
+    private var statsAudioSent = 0
+    @Volatile
+    private var lastStatsBytes = 0L
+    @Volatile
+    private var lastStatsTime = 0L
+
+    fun getBitrateBps(): Int = statsBitrateBps
+    fun getAudioSent(): Int = statsAudioSent
+
+    fun resetStats() {
+        statsBitrateBps = 0
+        statsAudioSent = 0
+        lastStatsBytes = 0L
+        lastStatsTime = 0L
+    }
+
+    fun pollStats() {
+        try {
+            peerConnection?.getStats(object : StatsObserver {
+                override fun onComplete(reports: Array<StatsReport>) {
+                    try {
+                        var totalBytes = 0L
+                        for (r in reports) {
+                            if (r.type == "ssrc") {
+                                for (v in r.values) {
+                                    if (v.name == "bytesSent") totalBytes += v.value.toLong()
+                                }
+                            }
+                        }
+                        val now = System.currentTimeMillis()
+                        if (lastStatsTime > 0) {
+                            val elapsed = (now - lastStatsTime) / 1000.0
+                            if (elapsed >= 1.0) {
+                                val bps = ((totalBytes - lastStatsBytes) * 8 / elapsed).toInt()
+                                if (bps >= 0) statsBitrateBps = bps
+                                Log.d("StreamingManager", "pollStats: totalBytes=%d, last=%d, elapsed=%.1fs, bps=%d".format(totalBytes, lastStatsBytes, elapsed, bps))
+                                lastStatsBytes = totalBytes
+                                lastStatsTime = now
+                            }
+                        } else {
+                            Log.d("StreamingManager", "pollStats: first sample, totalBytes=%d".format(totalBytes))
+                            lastStatsBytes = totalBytes
+                            lastStatsTime = now
+                        }
+                    } catch (_: Exception) {}
+                }
+            }, null)
+        } catch (_: Exception) {}
+    }
+
     init {
         ensureInitialized(context)
 
@@ -136,13 +189,13 @@ class StreamingManager(private val context: Context) {
 
     fun sendAudio(buffer: ByteBuffer, samples: Int) {
         val dc = audioDataChannel ?: return
+        if (dc.state() != DataChannel.State.OPEN) return
         buffer.rewind()
         val len = samples * 2
         if (len > MAX_AUDIO_BYTES) return
         buffer.limit(len)
-        if (!dc.send(DataChannel.Buffer(buffer, true))) {
-            Log.w("StreamingManager", "audio DataChannel send returned false")
-        }
+        statsAudioSent++
+        dc.send(DataChannel.Buffer(buffer, true))
     }
 
     fun addIceCandidate(candidate: IceCandidate) {
@@ -153,6 +206,7 @@ class StreamingManager(private val context: Context) {
         audioDataChannel?.close()
         audioDataChannel = null
         peerConnection?.dispose()
+        peerConnection = null
         videoSource?.dispose()
         audioDeviceModule?.release()
         peerConnectionFactory?.dispose()

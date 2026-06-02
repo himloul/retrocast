@@ -74,12 +74,25 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                     +"""
                                          const status = document.getElementById('status');
                                          const video = document.getElementById('remoteVideo');
-                                         let ws;
-                                         let audioCtx = null;
-                                         let audioScheduledTime = 0;
-                                         let targetSampleRate = 44100;
-                                         let audioQueue = [];
-                                         let audioPlaying = false;
+                                          let ws;
+                                          let pc = null;
+                                          let audioCtx = null;
+                                          let audioScheduledTime = 0;
+                                          let targetSampleRate = 44100;
+                                          let audioQueue = [];
+                                          let audioPlaying = false;
+
+                                          function setStatus(msg, type) {
+                                              status.innerText = msg;
+                                              status.style.color = type === 'error' ? '#ff4444' : type === 'ok' ? '#44ff44' : 'rgba(255,255,255,0.4)';
+                                          }
+
+                                          function closePC() {
+                                              if (pc) {
+                                                  pc.close();
+                                                  pc = null;
+                                              }
+                                          }
 
                                           function scheduleAudioQueue() {
                                               audioPlaying = true;
@@ -99,12 +112,12 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                              if (audioQueue.length > 0) scheduleAudioQueue();
                                          }
 
-                                         function connect() {
-                                             ws = new WebSocket('ws://' + location.host + '/ws');
-                                             
-                                             const pc = new RTCPeerConnection({
-                                                 iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                                             });
+                                          function connect() {
+                                              closePC();
+                                              setStatus('Connecting...', '');
+                                              ws = new WebSocket('ws://' + location.host + '/ws');
+                                              
+                                              pc = new RTCPeerConnection({ iceServers: [] });
 
                                              pc.ondatachannel = (event) => {
                                                  const dc = event.channel;
@@ -134,18 +147,21 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                                  }
                                              };
 
-                                             pc.ontrack = (event) => {
-                                                 console.log('Track received:', event.track.kind);
-                                                 status.innerText = 'Streaming Active';
-                                                 if (video.srcObject !== event.streams[0]) {
-                                                     video.srcObject = event.streams[0];
-                                                 }
-                                             };
+                                              pc.ontrack = (event) => {
+                                                  console.log('Track received:', event.track.kind);
+                                                  setStatus('Streaming Active', 'ok');
+                                                  if (video.srcObject !== event.streams[0]) {
+                                                      video.srcObject = event.streams[0];
+                                                  }
+                                              };
 
-                                             pc.onconnectionstatechange = () => {
-                                                 console.log('State:', pc.connectionState);
-                                                 if (pc.connectionState === 'connected') status.innerText = 'Connected';
-                                             };
+                                              pc.onconnectionstatechange = () => {
+                                                  console.log('State:', pc.connectionState);
+                                                  if (pc.connectionState === 'connected') setStatus('Connected', '');
+                                                  if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                                                      setStatus('Connection lost, reconnecting...', 'error');
+                                                  }
+                                              };
 
                                              ws.onmessage = async (event) => {
                                                  const msg = JSON.parse(event.data);
@@ -164,13 +180,18 @@ class SignalingServer(private val context: Context, private val port: Int) {
                                                  if (event.candidate) ws.send(JSON.stringify(event.candidate));
                                              };
                                              
-                                             ws.onclose = () => setTimeout(connect, 2000);
+                                              ws.onclose = () => {
+                                                  setStatus('Reconnecting...', 'error');
+                                                  setTimeout(connect, 2000);
+                                              };
+
+                                              ws.onerror = () => setStatus('Connection error, retrying...', 'error');
+                                              ws.onopen = () => setStatus('Waiting for signal...', '');
                                          }
 
-                                         window.onclick = () => {
-                                             video.play().catch(e => console.log('Play error:', e));
-                                             status.innerText = 'Connecting...';
-                                             if (!ws) connect();
+                                          window.onclick = () => {
+                                              video.play().catch(e => console.log('Play error:', e));
+                                              if (!ws || ws.readyState > 1) { setStatus('Connecting...', ''); connect(); }
                                              if (!audioCtx) {
                                                  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: targetSampleRate });
                                                  audioScheduledTime = audioCtx.currentTime + 0.1;
