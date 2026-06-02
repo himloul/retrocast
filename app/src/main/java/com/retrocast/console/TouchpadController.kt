@@ -32,7 +32,7 @@ fun TouchpadController(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isNarrow = maxWidth < 360.dp
         val dpadSize = if (isLandscape) 140.dp else if (isNarrow) 120.dp else 150.dp
-        val sidePad = if (isLandscape) 32.dp else if (isNarrow) 4.dp else 8.dp
+        val sidePad = if (isLandscape) 56.dp else if (isNarrow) 4.dp else 8.dp
         val bottomPad = if (isLandscape) 0.dp else if (isNarrow) 140.dp else 180.dp
         val clusterSpacing = if (isNarrow) 36.dp else 52.dp
 
