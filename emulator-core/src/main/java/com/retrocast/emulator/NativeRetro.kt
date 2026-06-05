@@ -61,4 +61,6 @@ class NativeRetro {
     external fun setCasting(casting: Boolean)
 
     external fun setLocalDisplayActive(active: Boolean)
+
+    external fun resetAudio()
 }

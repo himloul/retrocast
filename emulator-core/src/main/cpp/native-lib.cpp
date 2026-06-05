@@ -213,10 +213,9 @@ size_t audio_batch_cb(const int16_t *d, size_t f) {
     }
 
     size_t needed = f * 2;
-    while (g_engine.audio_rb.available_to_write() < needed && g_engine.emu_running) {
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    if (g_engine.audio_rb.available_to_write() < needed) {
+        return f;
     }
-    if (!g_engine.emu_running) return 0;
     g_engine.audio_rb.write(d, needed);
     sendAudioToJava(d, f);
     return f;
@@ -534,5 +533,11 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setCasting(JNIEnv
 
 JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setLocalDisplayActive(JNIEnv*, jobject, jboolean active) {
     g_engine.local_display_active.store(active);
+}
+
+JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_resetAudio(JNIEnv*, jobject) {
+    g_engine.audio_rb.head = 0;
+    g_engine.audio_rb.tail = 0;
+    setupOboeStream((int32_t)g_engine.av_sample_rate);
 }
 }

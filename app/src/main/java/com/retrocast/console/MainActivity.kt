@@ -615,6 +615,13 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (isCoreReady) {
+            nativeRetro.resetAudio()
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         if (isCoreReady) {
