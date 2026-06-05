@@ -54,7 +54,8 @@ import android.os.Looper
 import java.nio.ByteBuffer
 
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -688,12 +689,14 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
         Column(modifier = modifier) {
             Text("Games", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp))
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(2),
+                contentPadding = PaddingValues(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(romFiles) { rom ->
-                    GameCard(rom = rom, onClick = { onRomSelected(rom) })
+                items(romFiles.size) { index ->
+                    GameCard(rom = romFiles[index], onClick = { onRomSelected(romFiles[index]) })
                 }
             }
         }
@@ -717,7 +720,7 @@ fun GameCard(rom: File, onClick: () -> Unit) {
 
     Card(
         onClick = onClick,
-        modifier = Modifier.size(120.dp),
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
