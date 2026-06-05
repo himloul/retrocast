@@ -28,6 +28,18 @@ class HapticFeedbackManager(context: Context) {
     }
 
     /**
+     * Trigger a heavy "click" effect for long-press actions.
+     */
+    fun triggerHeavyClick() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(20)
+        }
+    }
+
+    /**
      * Trigger a heavy "tick" effect for DPAD or scroll.
      */
     fun triggerTick() {

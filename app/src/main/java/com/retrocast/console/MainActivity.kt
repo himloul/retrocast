@@ -14,6 +14,8 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -229,6 +231,18 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 }
             }
 
+            val onRomDelete: (File, Boolean) -> Unit = { file, deleteSaves ->
+                if (file.absolutePath == loadedRomPath) {
+                    shutdownGame()
+                }
+                if (deleteSaves) {
+                    File(file.absolutePath + ".state").delete()
+                    File(filesDir, "saves/${file.nameWithoutExtension}.sav").delete()
+                    File(filesDir, "saves/${file.nameWithoutExtension}.srm").delete()
+                }
+                refreshRomLibrary()
+            }
+
             MaterialTheme(colorScheme = colorScheme) {
                 ModalNavigationDrawer(
                     drawerState = drawerState,
@@ -260,6 +274,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                                 onOpenMenu = { scope.launch { drawerState.open() } },
                                 romFiles = romFiles,
                                 onRomSelected = { file -> loadLocalRom(file) },
+                                onRomDelete = onRomDelete,
                                 loadedRomPath = loadedRomPath
                             )
                         } else {
@@ -274,6 +289,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                                 onOpenMenu = { scope.launch { drawerState.open() } },
                                 romFiles = romFiles,
                                 onRomSelected = { file -> loadLocalRom(file) },
+                                onRomDelete = onRomDelete,
                                 loadedRomPath = loadedRomPath
                             )
                         }
@@ -306,6 +322,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         onOpenMenu: () -> Unit,
         romFiles: List<File>,
         onRomSelected: (File) -> Unit,
+        onRomDelete: (File, Boolean) -> Unit,
         loadedRomPath: String?
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -342,7 +359,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                     }
                 }
             } else {
-                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, modifier = Modifier.weight(1f).fillMaxWidth())
+                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, onRomDelete = onRomDelete, modifier = Modifier.weight(1f).fillMaxWidth())
             }
         }
     }
@@ -358,6 +375,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         onOpenMenu: () -> Unit,
         romFiles: List<File>,
         onRomSelected: (File) -> Unit,
+        onRomDelete: (File, Boolean) -> Unit,
         loadedRomPath: String?
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
@@ -375,7 +393,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 }
                 TouchpadController(nativeRetro = nativeRetro, hapticManager = hapticManager, isLandscape = true)
             } else {
-                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, modifier = Modifier.fillMaxSize())
+                GameLibrary(romFiles = romFiles, onRomSelected = onRomSelected, onRomDelete = onRomDelete, modifier = Modifier.fillMaxSize())
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(8.dp).align(Alignment.TopCenter),
@@ -676,7 +694,7 @@ fun CastDashboard(castUrl: String, showStats: Boolean = false, fps: Float = 0f, 
 }
 
 @Composable
-fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: Modifier = Modifier) {
+fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, onRomDelete: (File, Boolean) -> Unit, modifier: Modifier = Modifier) {
     var searchQuery by remember { mutableStateOf("") }
     val filtered = remember(searchQuery, romFiles) {
         if (searchQuery.isBlank()) romFiles
@@ -721,7 +739,7 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(filtered.size) { index ->
-                        GameCard(rom = filtered[index], onClick = { onRomSelected(filtered[index]) })
+                        GameCard(rom = filtered[index], onClick = { onRomSelected(filtered[index]) }, onDelete = onRomDelete)
                     }
                 }
             }
@@ -729,8 +747,9 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GameCard(rom: File, onClick: () -> Unit) {
+fun GameCard(rom: File, onClick: () -> Unit, onDelete: (File, Boolean) -> Unit) {
     val name = rom.nameWithoutExtension
     val initials = name.split(Regex("[^A-Za-z0-9]"))
         .filter { it.isNotBlank() }
@@ -738,15 +757,58 @@ fun GameCard(rom: File, onClick: () -> Unit) {
         .joinToString("") { it.first().uppercase() }
         .ifEmpty { "GB" }
 
+    val context = LocalContext.current
+    val haptic = remember { HapticFeedbackManager(context) }
+
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var deleteSaves by remember { mutableStateOf(false) }
 
     LaunchedEffect(rom) {
         thumbnail = ThumbnailManager.load(name)
     }
 
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete ROM?") },
+            text = {
+                Column {
+                    Text("This will permanently delete \"$name\".")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = deleteSaves, onCheckedChange = { deleteSaves = it })
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Also delete save data")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    ThumbnailManager.deleteCache(name)
+                    rom.delete()
+                    showDeleteDialog = false
+                    onDelete(rom, deleteSaves)
+                }) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        modifier = Modifier.fillMaxWidth().aspectRatio(1f).combinedClickable(
+            onClick = onClick,
+            onLongClick = {
+                haptic.triggerHeavyClick()
+                showDeleteDialog = true
+            }
+        ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {

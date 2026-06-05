@@ -22,6 +22,11 @@ object ThumbnailManager {
         cacheDir = File(context.filesDir, "thumbnails").apply { mkdirs() }
     }
 
+    fun deleteCache(romName: String) {
+        val dir = cacheDir ?: return
+        File(dir, "$romName.png").delete()
+    }
+
     suspend fun load(romName: String): Bitmap? {
         val dir = cacheDir ?: return null
 
@@ -30,29 +35,31 @@ object ThumbnailManager {
             return BitmapFactory.decodeFile(cacheFile.absolutePath)
         }
 
-        val attempts = listOf(
-            romName,
-            romName.replace(Regex("\\(.*?\\)"), "").replace(Regex("\\[.*?\\]"), "").trim()
-        ).distinct()
+        val cleaned = romName.replace(Regex("\\(.*?\\)"), "").replace(Regex("\\[.*?\\]"), "").trim()
+        val baseNames = listOf(romName, cleaned).distinct()
+        val regionSuffixes = listOf("", " (USA)", " (Japan)", " (Europe)", " (USA, Europe)", " (World)")
 
         return withContext(Dispatchers.IO) {
-            for (name in attempts) {
-                val encoded = URLEncoder.encode(name, "UTF-8").replace("+", "%20")
-                val url = "$BOXART_BASE/$encoded.png"
-                try {
-                    val conn = URL(url).openConnection() as HttpURLConnection
-                    conn.connectTimeout = NETWORK_TIMEOUT_MS
-                    conn.readTimeout = NETWORK_TIMEOUT_MS
-                    conn.connect()
-                    if (conn.responseCode == 200) {
-                        val bytes = conn.inputStream.use { it.readBytes() }
-                        cacheFile.outputStream().use { it.write(bytes) }
-                        Log.i(TAG, "Cached thumbnail for $romName")
-                        return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            for (base in baseNames) {
+                for (suffix in regionSuffixes) {
+                    val target = base + suffix
+                    val encoded = URLEncoder.encode(target, "UTF-8").replace("+", "%20")
+                    val url = "$BOXART_BASE/$encoded.png"
+                    try {
+                        val conn = URL(url).openConnection() as HttpURLConnection
+                        conn.connectTimeout = NETWORK_TIMEOUT_MS
+                        conn.readTimeout = NETWORK_TIMEOUT_MS
+                        conn.connect()
+                        if (conn.responseCode == 200) {
+                            val bytes = conn.inputStream.use { it.readBytes() }
+                            cacheFile.outputStream().use { it.write(bytes) }
+                            Log.i(TAG, "Cached thumbnail for $romName")
+                            return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                        conn.disconnect()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to load $url: ${e.message}")
                     }
-                    conn.disconnect()
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to load $url: ${e.message}")
                 }
             }
             null
