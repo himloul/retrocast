@@ -695,14 +695,19 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
         Column(modifier = modifier) {
             Text("Games", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp))
-            OutlinedTextField(
+            TextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                 placeholder = { Text("Search") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent)
+                colors = TextFieldDefaults.colors(
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                )
             )
             if (filtered.isEmpty()) {
                 Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
