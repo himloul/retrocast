@@ -677,6 +677,12 @@ fun CastDashboard(castUrl: String, showStats: Boolean = false, fps: Float = 0f, 
 
 @Composable
 fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: Modifier = Modifier) {
+    var searchQuery by remember { mutableStateOf("") }
+    val filtered = remember(searchQuery, romFiles) {
+        if (searchQuery.isBlank()) romFiles
+        else romFiles.filter { it.nameWithoutExtension.contains(searchQuery, ignoreCase = true) }
+    }
+
     if (romFiles.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -689,14 +695,29 @@ fun GameLibrary(romFiles: List<File>, onRomSelected: (File) -> Unit, modifier: M
         Column(modifier = modifier) {
             Text("Games", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp))
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(romFiles.size) { index ->
-                    GameCard(rom = romFiles[index], onClick = { onRomSelected(romFiles[index]) })
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                placeholder = { Text("Search") },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = Color.Transparent)
+            )
+            if (filtered.isEmpty()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("No games match", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(filtered.size) { index ->
+                        GameCard(rom = filtered[index], onClick = { onRomSelected(filtered[index]) })
+                    }
                 }
             }
         }
