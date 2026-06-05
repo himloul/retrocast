@@ -294,20 +294,6 @@ JNIEXPORT void JNICALL Java_com_retrocast_emulator_NativeRetro_setPaths(JNIEnv* 
     env->ReleaseStringUTFChars(sav, s2);
 }
 
-static void registerCoreCallbacks() {
-    if (!g_engine.core_handle) return;
-    auto setEnv = (retro_set_environment_t)dlsym(g_engine.core_handle, "retro_set_environment");
-    auto setVideo = (retro_set_video_refresh_t)dlsym(g_engine.core_handle, "retro_set_video_refresh");
-    auto setAudio = (retro_set_audio_sample_batch_t)dlsym(g_engine.core_handle, "retro_set_audio_sample_batch");
-    auto setInput = (retro_set_input_state_t)dlsym(g_engine.core_handle, "retro_set_input_state");
-    auto setPoll = (retro_set_input_poll_t)dlsym(g_engine.core_handle, "retro_set_input_poll");
-    if (setEnv) setEnv(env_cb);
-    if (setVideo) setVideo(video_refresh_cb);
-    if (setAudio) setAudio(audio_batch_cb);
-    if (setInput) setInput(input_state_cb);
-    if (setPoll) setPoll([](){});
-}
-
 static std::string getSavePath() {
     return g_engine.save_dir + "/" +
         g_engine.rom_path.substr(g_engine.rom_path.find_last_of("/\\") + 1) + ".sav";
@@ -365,7 +351,6 @@ JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadState(JNI
 
 JNIEXPORT jboolean JNICALL Java_com_retrocast_emulator_NativeRetro_loadGame(JNIEnv* env, jobject, jstring path) {
     LOGI("loadGame called");
-    registerCoreCallbacks();
     auto retro_init_fn = (void (*)())dlsym(g_engine.core_handle, "retro_init");
     if (retro_init_fn) retro_init_fn();
     const char* p = env->GetStringUTFChars(path, nullptr); g_engine.rom_path = p;

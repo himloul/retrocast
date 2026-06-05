@@ -85,9 +85,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
     private var streamFps by mutableStateOf(0f)
     private var streamBitrate by mutableStateOf(0)
     private var streamAudioSent by mutableStateOf(0)
-    private val castFrameTimestamps = LongArray(30)
-    private var castTsIndex = 0
-    private var castTsCount = 0
+    private val castFpsCounter = FpsCounter()
 
     private var nativePresentation: GamePresentation? = null
     private var emulatorView: EmulatorView? = null
@@ -148,19 +146,8 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
         try { nativePresentation?.setFrame(pixels, width, height) } catch (_: Exception) {}
         if (!isCasting) return
 
-        val frameNow = System.nanoTime()
-        castFrameTimestamps[castTsIndex] = frameNow
-        castTsIndex = (castTsIndex + 1) % castFrameTimestamps.size
-        if (castTsCount < castFrameTimestamps.size) castTsCount++
-        if (castTsCount >= 2) {
-            val newest = castFrameTimestamps[(castTsIndex - 1 + castFrameTimestamps.size) % castFrameTimestamps.size]
-            val oldest = castFrameTimestamps[(castTsIndex - castTsCount + castFrameTimestamps.size) % castFrameTimestamps.size]
-            val elapsed = newest - oldest
-            if (elapsed > 0) {
-                val fps = (castTsCount - 1).toFloat() / (elapsed / 1_000_000_000f)
-                if (fps.toInt() != streamFps.toInt()) streamFps = fps
-            }
-        }
+        val fps = castFpsCounter.update()
+        if (fps.toInt() != streamFps.toInt()) streamFps = fps
 
         val yStride = width
         val uvStride = width / 2
@@ -584,7 +571,7 @@ class MainActivity : ComponentActivity(), NativeRetro.FrameCallback, NativeRetro
                 })
                 sm.startStreaming(videoCapturer)
                 sm.resetStats()
-                castTsIndex = 0; castTsCount = 0
+                castFpsCounter.reset()
                 withContext(Dispatchers.Main) { streamFps = 0f; streamBitrate = 0; streamAudioSent = 0 }
 
                 if (signalingServer == null) {

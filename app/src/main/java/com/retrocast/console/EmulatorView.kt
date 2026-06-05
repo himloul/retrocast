@@ -19,11 +19,7 @@ open class EmulatorView @JvmOverloads constructor(
     private val paint = Paint().apply { isFilterBitmap = false }
     private val destRect = Rect()
     private var showStats = false
-    private var streamBitrate = 0
-    private val frameTimestamps = LongArray(30)
-    private var tsIndex = 0
-    private var tsCount = 0
-    private var currentFps = 0f
+    private val fpsCounter = FpsCounter()
 
     private val overlayBg = Paint().apply { color = 0x80000000.toInt() }
     private val overlayText = Paint().apply {
@@ -35,28 +31,11 @@ open class EmulatorView @JvmOverloads constructor(
 
     fun setShowStats(enabled: Boolean) { showStats = enabled }
 
-    fun setBitrate(bps: Int) { streamBitrate = bps }
-
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         setMeasuredDimension(
             MeasureSpec.getSize(widthMeasureSpec),
             MeasureSpec.getSize(heightMeasureSpec)
         )
-    }
-
-    private fun updateFps() {
-        val now = System.nanoTime()
-        frameTimestamps[tsIndex] = now
-        tsIndex = (tsIndex + 1) % frameTimestamps.size
-        if (tsCount < frameTimestamps.size) tsCount++
-        if (tsCount >= 2) {
-            val newest = frameTimestamps[(tsIndex - 1 + frameTimestamps.size) % frameTimestamps.size]
-            val oldest = frameTimestamps[(tsIndex - tsCount + frameTimestamps.size) % frameTimestamps.size]
-            val elapsed = newest - oldest
-            if (elapsed > 0) {
-                currentFps = (tsCount - 1).toFloat() / (elapsed / 1_000_000_000f)
-            }
-        }
     }
 
     fun setFrame(pixels: ByteBuffer, width: Int, height: Int) {
@@ -81,10 +60,9 @@ open class EmulatorView @JvmOverloads constructor(
                     destRect.set(dx, dy, dx + dw, dy + dh)
                     canvas.drawBitmap(ready, null, destRect, paint)
                     if (showStats) {
-                        updateFps()
-                        canvas.drawRoundRect(8f, 8f, 240f, 92f, 8f, 8f, overlayBg)
-                        canvas.drawText("FPS: %.0f".format(currentFps), 18f, 48f, overlayText)
-                        canvas.drawText("Bitrate: %d kbps".format(streamBitrate / 1000), 18f, 84f, overlayText)
+                        val fps = fpsCounter.update()
+                        canvas.drawRoundRect(8f, 8f, 160f, 52f, 8f, 8f, overlayBg)
+                        canvas.drawText("FPS: %.0f".format(fps), 18f, 40f, overlayText)
                     }
                     try { surface.unlockCanvasAndPost(canvas) } catch (_: Exception) {}
                 }
